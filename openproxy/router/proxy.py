@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from openproxy.models import UsageLog
@@ -54,6 +55,66 @@ async def _log_usage(
     )
     session.add(log)
     await session.flush()
+
+
+async def _safe_failover_log(
+    session: AsyncSession,
+    request_id: str,
+    provider_id: int | None,
+    model: str,
+    error_type: str | None,
+    latency_ms: int | None,
+) -> None:
+    """Log a failover to the database, ignoring DB contention errors.
+
+    Under concurrent load SQLite can return ``database is locked``; we
+    accept the data loss and move on so the failover chain isn't blocked.
+    """
+    try:
+        log = UsageLog(
+            request_id=request_id,
+            provider_id=provider_id,
+            model=model,
+            status="failover",
+            error_type=error_type,
+            stream_mode=False,
+            latency_ms=latency_ms,
+        )
+        session.add(log)
+        await session.flush()
+        await session.commit()
+    except OperationalError:
+        logger.warning("DB contention logging failover for provider %d", provider_id)
+    except Exception:
+        logger.exception("Unexpected error logging failover for provider %d", provider_id)
+
+
+async def _safe_stream_failover_log(
+    session: AsyncSession,
+    request_id: str,
+    provider_id: int | None,
+    model: str,
+    error_type: str | None,
+    latency_ms: int | None,
+) -> None:
+    """Like _safe_failover_log but for streaming requests."""
+    try:
+        log = UsageLog(
+            request_id=request_id,
+            provider_id=provider_id,
+            model=model,
+            status="failover",
+            error_type=error_type,
+            stream_mode=True,
+            latency_ms=latency_ms,
+        )
+        session.add(log)
+        await session.flush()
+        await session.commit()
+    except OperationalError:
+        logger.warning("DB contention logging stream failover for provider %d", provider_id)
+    except Exception:
+        logger.exception("Unexpected error logging stream failover for provider %d", provider_id)
 
 
 def _rewrite_body(body: dict[str, Any], model_name: str, overrides: dict | None = None) -> dict[str, Any]:
@@ -138,17 +199,14 @@ async def proxy_chat_completion(
                             err_msg = str(data["error"])[:500]
                             classified = ClassifiedError(ErrorType.SERVER_ERROR, err_msg, status_code=resp.status_code)
                             await record_failure(session, provider)
-                            await _log_usage(
+                            await _safe_failover_log(
                                 session=session,
                                 request_id=request_id,
                                 provider_id=provider.id,
                                 model=model_name,
-                                status="failover",
                                 error_type=classified.error_type.value,
-                                stream_mode=False,
                                 latency_ms=latency,
                             )
-                            await session.commit()
                             last_error = f"[{provider.name}:{model_name}] {classified}"
                             retryable = is_retryable(classified.error_type)
                             logger.warning(
@@ -196,19 +254,16 @@ async def proxy_chat_completion(
                         )
                         return data
 
-                    # Failure
+                    # Failure — log with DB contention tolerance
                     await record_failure(session, provider)
-                    await _log_usage(
+                    await _safe_failover_log(
                         session=session,
                         request_id=request_id,
                         provider_id=provider.id,
                         model=model_name,
-                        status="failover",
                         error_type=classified.error_type.value,
-                        stream_mode=False,
                         latency_ms=latency,
                     )
-                    await session.commit()
                     last_error = f"[{provider.name}:{model_name}] {classified}"
 
                     retryable = is_retryable(classified.error_type)
@@ -241,17 +296,14 @@ async def proxy_chat_completion(
                     latency = int((time.monotonic() - start) * 1000)
                     classified = classify_exception(exc)
                     await record_failure(session, provider)
-                    await _log_usage(
+                    await _safe_failover_log(
                         session=session,
                         request_id=request_id,
                         provider_id=provider.id,
                         model=model_name,
-                        status="failover",
                         error_type=classified.error_type.value,
-                        stream_mode=False,
                         latency_ms=latency,
                     )
-                    await session.commit()
                     last_error = f"[{provider.name}:{model_name}] {classified}"
                     cb_active = (
                         provider.cooldown_until is not None
@@ -357,17 +409,6 @@ async def proxy_streaming_chat_completion(
                             error_text = await resp.aread()
                             classified = classify_response(resp)
                             await record_failure(session, provider)
-                            await _log_usage(
-                                session=session,
-                                request_id=request_id,
-                                provider_id=provider.id,
-                                model=model_name,
-                                status="failover",
-                                error_type=classified.error_type.value if classified else "unknown",
-                                stream_mode=True,
-                                latency_ms=latency,
-                            )
-                            await session.commit()
                             error_type = classified.error_type.value if classified else "unknown"
                             last_error = f"[{provider.name}:{model_name}] HTTP {resp.status_code}: {error_text[:200]}"
                             retryable = is_retryable(classified.error_type) if classified else True
@@ -399,17 +440,6 @@ async def proxy_streaming_chat_completion(
                             # Non-SSE error body in 200 response
                             classified = ClassifiedError(ErrorType.SERVER_ERROR, decoded[:500], status_code=resp.status_code)
                             await record_failure(session, provider)
-                            await _log_usage(
-                                session=session,
-                                request_id=request_id,
-                                provider_id=provider.id,
-                                model=model_name,
-                                status="failover",
-                                error_type=classified.error_type.value,
-                                stream_mode=True,
-                                latency_ms=latency,
-                            )
-                            await session.commit()
                             last_error = f"[{provider.name}:{model_name}] {classified}"
                             retryable = is_retryable(classified.error_type)
                             logger.warning(
@@ -436,18 +466,30 @@ async def proxy_streaming_chat_completion(
                         token_count = body.count(b'data: ') - body.count(b'data: [DONE]')
                         yield body
 
-                        await _log_usage(
-                            session=session,
-                            request_id=request_id,
-                            provider_id=provider.id,
-                            model=model_name,
-                            status="success",
-                            error_type=None,
-                            stream_mode=True,
-                            latency_ms=latency,
-                            completion_tokens=token_count,
-                        )
-                        await session.commit()
+                        # Log usage — response already sent, DB errors tolerated
+                        try:
+                            await _log_usage(
+                                session=session,
+                                request_id=request_id,
+                                provider_id=provider.id,
+                                model=model_name,
+                                status="success",
+                                error_type=None,
+                                stream_mode=True,
+                                latency_ms=latency,
+                                completion_tokens=token_count,
+                            )
+                            await session.commit()
+                        except OperationalError:
+                            logger.warning(
+                                "DB contention logging stream success for provider %d",
+                                provider.id,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Error logging stream success for provider %d",
+                                provider.id,
+                            )
                         logger.info(
                             "Streaming success",
                             extra={
@@ -464,17 +506,6 @@ async def proxy_streaming_chat_completion(
                     latency = int((time.monotonic() - start) * 1000)
                     classified = classify_exception(exc)
                     await record_failure(session, provider)
-                    await _log_usage(
-                        session=session,
-                        request_id=request_id,
-                        provider_id=provider.id,
-                        model=model_name,
-                        status="failover",
-                        error_type=classified.error_type.value,
-                        stream_mode=True,
-                        latency_ms=latency,
-                    )
-                    await session.commit()
                     last_error = f"[{provider.name}:{model_name}] {classified}"
                     logger.warning(
                         "Streaming connection error",

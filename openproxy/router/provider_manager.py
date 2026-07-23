@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import datetime
+import logging
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from openproxy.models import ModelSet, ModelSetEntry, Provider
 from openproxy.utils.settings_helper import get_int_setting
+
+logger = logging.getLogger(__name__)
 
 
 async def get_model_set_entries(
@@ -58,23 +62,53 @@ async def get_model_set_entries(
 
 
 async def record_failure(session: AsyncSession, provider: Provider) -> None:
-    """Increment consecutive_failures and optionally activate circuit breaker."""
-    provider.consecutive_failures += 1
-    threshold = await get_int_setting(session, "circuit_breaker_threshold", 3)
-    cooldown_seconds = await get_int_setting(session, "circuit_breaker_cooldown", 30)
+    """Increment consecutive_failures and optionally activate circuit breaker.
 
-    if provider.consecutive_failures >= threshold:
-        provider.cooldown_until = datetime.datetime.now() + datetime.timedelta(
-            seconds=cooldown_seconds
+    DB write failures (e.g. SQLite locked under concurrent load) are caught
+    and logged so the caller can continue the failover chain.
+    """
+    try:
+        provider.consecutive_failures += 1
+        threshold = await get_int_setting(session, "circuit_breaker_threshold", 3)
+        cooldown_seconds = await get_int_setting(session, "circuit_breaker_cooldown", 30)
+
+        if provider.consecutive_failures >= threshold:
+            provider.cooldown_until = datetime.datetime.now() + datetime.timedelta(
+                seconds=cooldown_seconds
+            )
+        await session.flush()
+    except OperationalError:
+        logger.warning(
+            "DB contention recording failure for provider %d (consecutive=%d)",
+            provider.id,
+            provider.consecutive_failures,
         )
-    await session.flush()
+    except Exception:
+        logger.exception(
+            "Unexpected error recording failure for provider %d",
+            provider.id,
+        )
 
 
 async def record_success(session: AsyncSession, provider: Provider) -> None:
-    """Reset consecutive_failures and clear cooldown on success."""
-    provider.consecutive_failures = 0
-    provider.cooldown_until = None
-    await session.flush()
+    """Reset consecutive_failures and clear cooldown on success.
+
+    DB write failures are caught and logged so the caller can continue.
+    """
+    try:
+        provider.consecutive_failures = 0
+        provider.cooldown_until = None
+        await session.flush()
+    except OperationalError:
+        logger.warning(
+            "DB contention recording success for provider %d",
+            provider.id,
+        )
+    except Exception:
+        logger.exception(
+            "Unexpected error recording success for provider %d",
+            provider.id,
+        )
 
 
 async def set_provider_cooldown(
