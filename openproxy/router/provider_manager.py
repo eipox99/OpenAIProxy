@@ -43,11 +43,31 @@ async def get_model_set_entries(
     entries: list[tuple[Provider, str, dict]] = []
     for entry in model_set.entries:
         if not entry.is_enabled:
+            logger.info(
+                "Skipping entry %d in set '%s': entry is disabled",
+                entry.id,
+                set_name,
+            )
             continue
         provider = entry.provider
         if provider is None or not provider.is_active:
+            logger.info(
+                "Skipping entry %d in set '%s': provider '%s' is %s",
+                entry.id,
+                set_name,
+                provider.name if provider else "None",
+                "inactive" if provider else "deleted",
+            )
             continue
         if provider.cooldown_until and provider.cooldown_until > now:
+            remaining = (provider.cooldown_until - now).total_seconds()
+            logger.info(
+                "Skipping entry %d in set '%s': provider '%s' in cooldown for %.0fs",
+                entry.id,
+                set_name,
+                provider.name,
+                remaining,
+            )
             continue
         overrides = {}
         if entry.overrides:
@@ -56,6 +76,14 @@ async def get_model_set_entries(
             except (json.JSONDecodeError, TypeError):
                 overrides = {}
         entries.append((provider, entry.model_name, overrides))
+        logger.info(
+            "Including entry %d in set '%s': provider '%s' model '%s' priority %d",
+            entry.id,
+            set_name,
+            provider.name,
+            entry.model_name,
+            entry.priority,
+        )
 
     # Entries are already ordered by priority via the relationship
     return entries

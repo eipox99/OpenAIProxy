@@ -147,6 +147,14 @@ async def proxy_chat_completion(
             "stream": False,
         },
     )
+    for idx, (prov, model, _) in enumerate(entries):
+        logger.info(
+            "Entry %d for request %s: provider '%s' model '%s'",
+            idx + 1,
+            request_id,
+            prov.name,
+            model,
+        )
 
     if not entries:
         logger.warning(
@@ -364,6 +372,14 @@ async def proxy_streaming_chat_completion(
             "stream": True,
         },
     )
+    for idx, (prov, model, _) in enumerate(entries):
+        logger.info(
+            "Entry %d for streaming request %s: provider '%s' model '%s'",
+            idx + 1,
+            request_id,
+            prov.name,
+            model,
+        )
 
     if not entries:
         logger.warning(
