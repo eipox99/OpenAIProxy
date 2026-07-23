@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAIProxy — Login</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #111;
+        }
+        .login-card {
+            width: 100%;
+            max-width: 400px;
+            padding: 2rem;
+        }
+        .login-card article {
+            padding: 2rem;
+        }
+        .login-card h1 {
+            text-align: center;
+            margin-bottom: 0.25rem;
+            font-size: 1.75rem;
+        }
+        .login-card .subtitle {
+            text-align: center;
+            color: var(--pico-muted-color);
+            margin-bottom: 2rem;
+            font-size: 0.9rem;
+        }
+        .login-card .error-msg {
+            color: #ff5050;
+            text-align: center;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+        .brand {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+        footer {
+            text-align: center;
+            margin-top: 1.5rem;
+            color: var(--pico-muted-color);
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <article>
+            <div class="brand">🔀</div>
+            <h1>OpenAIProxy</h1>
+            <p class="subtitle">LLM Router &amp; Proxy</p>
+
+            {% if error %}
+                <p class="error-msg">Invalid password. Please try again.</p>
+            {% endif %}
+
+            {% if not auth_enabled %}
+                <p class="error-msg">Authentication is not configured. Set <code>AUTH_TOKEN</code> in your <code>.env</code> file to enable login.</p>
+            {% else %}
+                <form method="POST" action="/login">
+                    <input
+                        type="password"
+                        name="password"
+                        placeholder="Enter your password"
+                        autocomplete="current-password"
+                        autofocus
+                        required
+                    />
+                    <button type="submit">Sign In</button>
+                </form>
+            {% endif %}
+        </article>
+        <footer>OpenAIProxy v0.1.0</footer>
+    </div>
+</body>
+</html>

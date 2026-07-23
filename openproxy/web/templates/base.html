@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAIProxy {% block title %}{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="/static/app.js?v=15"></script>
+    <style>
+        /* ── Layout ── */
+        body {
+            display: flex;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        /* ── Sidebar ── */
+        .sidebar {
+            width: 240px;
+            padding: 1.5rem 1rem;
+            background: #111;
+            border-right: 1px solid #222;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow-y: auto;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .sidebar .brand {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 2rem;
+            padding: 0 0.5rem;
+            color: #fff;
+        }
+        .sidebar .brand span {
+            color: #4fc3f7;
+        }
+        .sidebar nav {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+        .sidebar nav a {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            padding: 0.6rem 0.75rem;
+            border-radius: 8px;
+            color: #999;
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: all 0.15s;
+        }
+        .sidebar nav a:hover {
+            background: #1a1a1a;
+            color: #ddd;
+        }
+        .sidebar nav a.active {
+            background: #1e3a5f;
+            color: #4fc3f7;
+            font-weight: 600;
+        }
+        .sidebar .footer {
+            margin-top: auto;
+            padding: 1rem 0.5rem 0;
+            font-size: 0.75rem;
+            color: #555;
+            border-top: 1px solid #222;
+        }
+        .sidebar .footer .logout-btn {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.85rem;
+            border: 1px solid #333;
+            background: transparent;
+            color: #999;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .sidebar .footer .logout-btn:hover {
+            background: #1a1a1a;
+            color: #ff5050;
+            border-color: #ff5050;
+        }
+
+        /* ── Main content ── */
+        .content {
+            flex: 1;
+            padding: 2rem;
+            max-width: 1200px;
+            overflow-y: auto;
+        }
+        .content h1 {
+            margin-bottom: 1.5rem;
+            font-size: 1.6rem;
+        }
+
+        /* ── Status dots ── */
+        .status-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 0.4rem;
+        }
+        .status-dot.active { background: #2fb344; }
+        .status-dot.disabled { background: #555; }
+        .status-dot.cooldown { background: #f5a623; }
+
+        /* ── Badges ── */
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-auto { background: rgba(79, 195, 247, 0.15); color: #4fc3f7; }
+        .badge-manual { background: rgba(255, 255, 255, 0.08); color: #999; }
+
+        /* ── Provider card ── */
+        .provider-card {
+            padding: 1rem 1.25rem;
+            margin-bottom: 0.5rem;
+            background: #151515;
+            border-radius: 10px;
+            border: 1px solid #222;
+            transition: border-color 0.2s;
+        }
+        .provider-card:hover {
+            border-color: #333;
+        }
+        .provider-card.disabled {
+            opacity: 0.45;
+        }
+        .provider-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .provider-header .info {
+            flex: 1;
+            min-width: 0;
+        }
+        .provider-header .info .name {
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+        .provider-header .info .meta {
+            color: #666;
+            font-size: 0.8rem;
+        }
+        .provider-header .actions {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            flex-shrink: 0;
+        }
+        .provider-header .priority-btns {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+        .priority-btns button {
+            padding: 0;
+            width: 20px;
+            height: 14px;
+            font-size: 0.6rem;
+            line-height: 1;
+            border: 1px solid #333;
+            border-radius: 3px;
+            background: transparent;
+            color: #666;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .priority-btns button:hover {
+            background: #222;
+            color: #fff;
+        }
+
+        /* ── Model rows ── */
+        .model-section {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid #222;
+        }
+        .model-header-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            font-size: 0.8rem;
+            color: #888;
+        }
+        .model-header-row form {
+            display: flex;
+            gap: 0.25rem;
+            margin-left: auto;
+        }
+        .model-header-row input {
+            padding: 0.2rem 0.5rem;
+            font-size: 0.8rem;
+            width: 160px;
+        }
+        .model-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.35rem 0;
+            border-bottom: 1px solid #1a1a1a;
+        }
+        .model-row:last-child { border-bottom: none; }
+
+        /* ── Toggle switch ── */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 34px;
+            height: 20px;
+            cursor: pointer;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+            position: absolute;
+        }
+        .toggle-slider {
+            position: absolute;
+            inset: 0;
+            background: #444;
+            border-radius: 20px;
+            transition: 0.25s;
+        }
+        .toggle-slider::before {
+            content: "";
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            left: 3px;
+            bottom: 3px;
+            background: #fff;
+            border-radius: 50%;
+            transition: 0.25s;
+        }
+        .toggle-switch input:checked + .toggle-slider {
+            background: #4fc3f7;
+        }
+        .toggle-switch input:checked + .toggle-slider::before {
+            transform: translateX(14px);
+        }
+
+        /* ── Stats grid ── */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+	        .stat-card {
+	            text-align: center;
+	            padding: 1.25rem 1rem;
+	            background: #151515;
+	            border-radius: 10px;
+	            border: 1px solid #222;
+	            cursor: pointer;
+	            transition: border-color 0.2s;
+	        }
+	        .stat-card:hover { border-color: #4fc3f7; }
+	        .stat-card.active-filter { border-color: #4fc3f7; box-shadow: 0 0 8px rgba(79,195,247,0.3); }
+        .stat-card .num {
+            font-size: 1.8rem;
+            font-weight: 700;
+        }
+        .stat-card .label {
+            color: #888;
+            font-size: 0.8rem;
+            margin-top: 0.2rem;
+        }
+
+        /* ── Buttons ── */
+        button.small {
+            padding: 0.25rem 0.6rem;
+            font-size: 0.8rem;
+        }
+        .row-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+        .cooldown-badge {
+            font-size: 0.7rem;
+            background: rgba(245, 166, 35, 0.15);
+            color: #f5a623;
+            padding: 0.1rem 0.4rem;
+            border-radius: 4px;
+        }
+
+        /* ── Empty state ── */
+        .empty-state {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: #666;
+        }
+        .empty-state .icon { font-size: 3rem; margin-bottom: 1rem; }
+        .empty-state h3 { color: #aaa; margin-bottom: 0.5rem; }
+
+        /* ── Tables ── */
+        table { font-size: 0.85rem; }
+        .error-row { background: rgba(255, 80, 80, 0.06); }
+
+        /* ── Misc ── */
+        [x-cloak] { display: none !important; }
+        .flex { display: flex; }
+        .gap-1 { gap: 0.5rem; }
+        .items-center { align-items: center; }
+        .ml-auto { margin-left: auto; }
+        .text-muted { color: #888; font-size: 0.85rem; }
+        code { font-size: 0.85rem; }
+
+        /* ── Modal ── */
+        dialog article { max-width: 480px; }
+    </style>
+</head>
+<body>
+    <aside class="sidebar">
+        <div class="brand">🔀 <span>OpenAI</span>Proxy</div>
+        <nav>
+            <a href="/" class="{% block nav_dashboard %}{% endblock %}">
+                <span>📊</span> Dashboard
+            </a>
+            <a href="/providers" class="{% block nav_providers %}{% endblock %}">
+                <span>🔌</span> Providers
+            </a>
+            <a href="/sets" class="{% block nav_sets %}{% endblock %}">
+                <span>🧠</span> Model Sets
+            </a>
+            <a href="/logs" class="{% block nav_logs %}{% endblock %}">
+                <span>📋</span> Logs
+            </a>
+            <a href="/settings" class="{% block nav_settings %}{% endblock %}">
+                <span>⚙️</span> Settings
+            </a>
+        </nav>
+        <div class="footer">
+            <form method="POST" action="/logout" style="display:inline;">
+                <button type="submit" class="logout-btn">🚪 Logout</button>
+            </form>
+            <div style="margin-top:0.5rem;font-size:0.75rem;">OpenAIProxy v0.1.0</div>
+        </div>
+    </aside>
+    <main class="content">
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

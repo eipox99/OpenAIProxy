@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block nav_settings %}active{% endblock %}
+
+{% block content %}
+<h1>⚙️ Settings</h1>
+
+<div x-data="settingsData()" x-init="init()">
+    <template x-if="loading">
+        <article aria-busy="true">Loading settings...</article>
+    </template>
+
+    <template x-if="!loading">
+        <form @submit.prevent="saveAll()">
+            <template x-for="s in settings" :key="s.key">
+                <label>
+                    <span style="font-weight:600;" x-text="settingLabel(s.key)"></span>
+                    <small style="color:#888;display:block;margin-bottom:0.25rem;" x-text="settingHelp(s.key)"></small>
+                    <input type="text" x-model="s.value" :placeholder="settingDefault(s.key)">
+                </label>
+            </template>
+
+            <div style="display:flex;gap:0.5rem;margin-top:1rem;">
+                <button type="submit">💾 Save All</button>
+            </div>
+
+            <template x-if="saved">
+                <p style="color:#2fb344;margin-top:1rem;">✅ Settings saved</p>
+            </template>
+        </form>
+    </template>
+</div>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block nav_dashboard %}active{% endblock %}
+
+{% block content %}
+<h1>📊 Dashboard</h1>
+
+<div x-data="statsData()" x-init="init(); setInterval(() => fetchStats(), 10000)">
+    <template x-if="loading">
+        <article aria-busy="true" style="margin-bottom:2rem;">Loading...</article>
+    </template>
+    <template x-if="!loading && stats">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="num" x-text="stats.total_requests">0</div>
+                <div class="label">Total Requests</div>
+            </div>
+            <div class="stat-card">
+                <div class="num" x-text="stats.by_provider.length">0</div>
+                <div class="label">Active Providers</div>
+            </div>
+            <div class="stat-card">
+                <div class="num" x-text="stats.recent_errors.length" style="color:#ff5050;">0</div>
+                <div class="label">Errors / Failovers</div>
+            </div>
+        </div>
+    </template>
+</div>
+{% endblock %}

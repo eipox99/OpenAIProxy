@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}Model Sets{% endblock %}
+{% block nav_sets %}active{% endblock %}
+
+{% block content %}
+<h1>🧠 Model Sets</h1>
+
+<div x-data="modelSetsData()" x-init="init()">
+    <template x-if="loading">
+        <article aria-busy="true">Loading model sets...</article>
+    </template>
+
+    <template x-if="!loading">
+        <div>
+            <!-- No sets -->
+            <template x-if="sets.length === 0">
+                <div class="empty-state">
+                    <div class="icon">🧠</div>
+                    <h3>No model sets yet</h3>
+                    <p style="margin-bottom:1.5rem;color:#888;">
+                        Create a model set to define the priority-ordered list of models to try.
+                    </p>
+                    <button class="primary" onclick="openCreateModal()">➕ Create Model Set</button>
+                </div>
+            </template>
+
+            <!-- List of sets -->
+            <template x-if="sets.length > 0">
+                <div>
+                    <!-- Set selector tabs -->
+                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1.5rem;">
+                        <template x-for="s in sets" :key="s.id">
+                            <button class="outline" :class="selectedSetId === s.id ? 'primary' : 'secondary'"
+                                    @click="selectSet(s.id)" style="font-size:0.85rem;">
+                                <span x-text="s.name"></span>
+                            </button>
+                        </template>
+                        <button class="outline" onclick="openCreateModal()" style="font-size:0.85rem;">➕ New</button>
+                    </div>
+
+                    <!-- Selected set -->
+                    <template x-if="selectedSet">
+                        <div>
+                            <!-- Set name + actions -->
+                            <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap;">
+                                <template x-if="!editingName">
+                                    <h2 style="margin:0;font-size:1.2rem;cursor:pointer;" @click="startRename()">
+                                        <span x-text="selectedSet.name"></span>
+                                        <span style="font-size:0.75rem;color:#666;margin-left:0.3rem;">✏️</span>
+                                    </h2>
+                                </template>
+                                <template x-if="editingName">
+                                    <form @submit.prevent="submitRename()" style="display:flex;gap:0.3rem;align-items:center;">
+                                        <input type="text" x-model="renameValue" style="padding:0.3rem 0.5rem;font-size:0.95rem;width:200px;" autofocus>
+                                        <button type="submit" class="small" style="padding:0.2rem 0.5rem;">Save</button>
+                                        <button type="button" class="small secondary" @click="editingName = false" style="padding:0.2rem 0.5rem;">Cancel</button>
+                                    </form>
+                                </template>
+                                <button class="small secondary" @click="deleteSet(selectedSet.id, selectedSet.name)"
+                                        style="margin-left:auto;font-size:0.75rem;">🗑️ Delete Set</button>
+                            </div>
+
+                            <!-- Entries table -->
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Model</th>
+                                        <th>Provider</th>
+                                        <th>Enabled</th>
+                                        <th>Overrides</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="(e, idx) in selectedSet.entries" :key="e.id">
+                                        <tr>
+                                            <td style="white-space:nowrap;">
+                                                <button class="small" @click="moveUpEntry(idx)" :disabled="idx === 0"
+                                                        style="padding:0.1rem 0.3rem;font-size:0.65rem;">▲</button>
+                                                <button class="small" @click="moveDownEntry(idx)" :disabled="idx === selectedSet.entries.length - 1"
+                                                        style="padding:0.1rem 0.3rem;font-size:0.65rem;">▼</button>
+                                                <span style="margin-left:0.3rem;font-size:0.85rem;" x-text="e.priority"></span>
+                                            </td>
+                                            <td><code x-text="e.model_name" style="font-size:0.85rem;"></code></td>
+                                            <td x-text="e.provider_name" style="font-size:0.85rem;"></td>
+                                            <td>
+                                                <span class="toggle-switch" @click="toggleEntry(e.id)">
+                                                    <input type="checkbox" :checked="e.is_enabled">
+                                                    <span class="toggle-slider"></span>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <template x-if="!e._editingOverrides">
+                                                    <span @click="startEditOverrides(e)" style="cursor:pointer;font-size:0.75rem;color:#888;">
+                                                        <span x-text="formatOverrides(e.overrides)"></span>
+                                                        <span style="margin-left:0.2rem;">✏️</span>
+                                                    </span>
+                                                </template>
+                                                <template x-if="e._editingOverrides">
+                                                    <form @submit.prevent="saveOverrides(e)" style="display:flex;gap:0.2rem;align-items:center;">
+                                                        <input type="text" x-model="e._overridesText" placeholder='{"reasoning_effort":"high"}'
+                                                               style="padding:0.1rem 0.3rem;font-size:0.75rem;width:160px;font-family:monospace;">
+                                                        <button type="submit" style="padding:0.1rem 0.3rem;font-size:0.7rem;">💾</button>
+                                                        <button type="button" class="secondary" @click="cancelEditOverrides(e)"
+                                                                style="padding:0.1rem 0.3rem;font-size:0.7rem;">✕</button>
+                                                    </form>
+                                                </template>
+                                            </td>
+                                            <td>
+                                                <button class="small secondary" @click="deleteEntry(e.id)"
+                                                        style="padding:0.1rem 0.3rem;font-size:0.7rem;">✕</button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+
+                            <template x-if="selectedSet.entries.length === 0">
+                                <article>
+                                    <p style="color:#888;">No entries yet. Add a model+provider below.</p>
+                                </article>
+                            </template>
+
+                            <!-- Add entry form -->
+                            <div class="model-header-row" style="margin-top:1rem;padding-top:1rem;border-top:1px solid #222;">
+                                <span style="font-weight:600;font-size:0.9rem;">➕ Add Entry</span>
+                                <form @submit.prevent="addEntry()" style="display:flex;gap:0.5rem;margin-left:auto;flex-wrap:wrap;">
+                                    <select x-model="newEntryProvider" @change="onProviderChange()"
+                                            style="padding:0.2rem 0.5rem;font-size:0.85rem;width:auto;min-width:140px;">
+                                        <option value="">Select provider...</option>
+                                        <template x-for="p in providers" :key="p.id">
+                                            <option :value="p.id" x-text="p.name"></option>
+                                        </template>
+                                    </select>
+                                    <template x-if="newEntryProvider && availableModels.length > 0">
+                                        <select x-model="newEntryModel"
+                                                style="padding:0.2rem 0.5rem;font-size:0.85rem;width:auto;min-width:180px;">
+                                            <option value="">Select model...</option>
+                                            <template x-for="m in availableModels" :key="m">
+                                                <option :value="m" x-text="m"></option>
+                                            </template>
+                                        </select>
+                                    </template>
+                                    <template x-if="newEntryProvider && availableModels.length === 0">
+                                        <input type="text" x-model="newEntryModel" placeholder="Type model name..."
+                                               style="padding:0.2rem 0.5rem;font-size:0.85rem;width:180px;">
+                                    </template>
+                                    <template x-if="!newEntryProvider">
+                                        <input type="text" x-model="newEntryModel" placeholder="Type model name..."
+                                               style="padding:0.2rem 0.5rem;font-size:0.85rem;width:180px;">
+                                    </template>
+                                    <button type="submit" class="small" style="padding:0.2rem 0.5rem;">+ Add</button>
+                                </form>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+	        </div>
+	    </template>
+	</div>
+
+	<!-- Create modal -->
+	<dialog id="create-modal">
+	    <article>
+	        <header><h3>Create Model Set</h3></header>
+        <form onsubmit="event.preventDefault(); createSet()">
+            <label>
+                Name
+                <input type="text" id="newSetNameInput" placeholder="e.g. freemodels, paidmodels" required>
+            </label>
+            <footer style="display:flex;gap:0.5rem;justify-content:flex-end;">
+	                <button type="button" class="secondary" onclick="document.getElementById('create-modal').close()">Cancel</button>
+	                <button type="submit">Create</button>
+	            </footer>
+	        </form>
+	    </article>
+	</dialog>
+	<script>
+	    function openCreateModal() {
+	        document.getElementById('newSetNameInput').value = '';
+	        document.getElementById('create-modal').showModal();
+	    }
+	    async function createSet() {
+	        const name = document.getElementById('newSetNameInput').value.trim();
+	        if (!name) return;
+	        const resp = await fetch('/api/model-sets', {
+	            method: 'POST',
+	            headers: {'Content-Type': 'application/json'},
+	            body: JSON.stringify({name}),
+	        });
+	        if (resp.ok) {
+	            document.getElementById('create-modal').close();
+	            location.reload();
+	        } else {
+	            const err = await resp.json();
+	            alert(err.detail || 'Failed');
+	        }
+	    }
+	</script>
+	{% endblock %}

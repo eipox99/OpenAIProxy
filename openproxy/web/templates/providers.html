@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block title %}Providers{% endblock %}
+{% block nav_providers %}active{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;">
+    <h1 style="margin:0;">🔌 Providers</h1>
+    <button class="primary" onclick="document.getElementById('add-modal').showModal()">➕ Add Provider</button>
+</div>
+
+<div x-data="providersData()" x-init="init()">
+    <template x-if="loading">
+        <article aria-busy="true">Loading providers...</article>
+    </template>
+
+    <template x-if="!loading && providers.length === 0">
+        <div class="empty-state">
+            <div class="icon">🔌</div>
+            <h3>No providers yet</h3>
+            <p style="margin-bottom:1.5rem;color:#888;">
+                Click "Add Provider" to configure your first LLM provider.
+            </p>
+        </div>
+    </template>
+
+    <template x-if="!loading && providers.length > 0">
+        <div>
+            <template x-for="(p, idx) in providers" :key="p.id">
+                <div class="provider-card" :class="p.is_active ? '' : 'disabled'">
+                    <!-- Header -->
+                    <div class="provider-header">
+                        <span class="status-dot" :class="statusClass(p)"></span>
+                        <div class="info">
+                            <div class="name">
+                                <span x-text="p.name"></span>
+                            </div>
+                            <div class="meta" x-text="p.base_url"></div>
+                            <template x-if="p.cooldown_until && new Date(p.cooldown_until) > new Date()">
+                                <span class="cooldown-badge">⏳ Cooldown until <span x-text="new Date(p.cooldown_until).toLocaleTimeString()"></span></span>
+                            </template>
+                            <template x-if="p.consecutive_failures > 0 && !p.cooldown_until">
+                                <span class="cooldown-badge" style="background:rgba(255,80,80,0.1);color:#ff5050;">
+                                    ⚠ <span x-text="p.consecutive_failures"></span> consecutive failures
+                                </span>
+                            </template>
+                        </div>
+                        <div class="actions">
+                            <button class="small outline" x-on:click="scanProvider(p.id, $el)" title="Auto-detect models from provider">🔍 Scan</button>
+                            <button class="small outline" @click="openEdit(p)" title="Edit provider">✏️</button>
+                            <span class="toggle-switch" @click="toggleProvider(p.id)" title="Enable/disable provider">
+                                <input type="checkbox" :checked="p.is_active">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <button class="small secondary" @click="deleteProvider(p.id, p.name)" title="Delete provider">🗑️</button>
+                        </div>
+                    </div>
+
+                    <!-- Models -->
+                    <div class="model-section">
+                        <div class="model-header-row">
+                            <span @click="toggleCollapse(p.id)" style="cursor:pointer;user-select:none;">
+                                <span x-text="isCollapsed(p.id) ? '▶' : '▼'"></span>
+                            </span>
+                            <span>🧠 Models</span>
+                            <span style="color:#888;" x-text="'(' + (p.models || []).filter(m => m.is_enabled).length + '/' + (p.models || []).length + ' active)'"></span>
+                            <form @submit.prevent="addModel(p.id, $event.target.querySelector('input').value); $event.target.querySelector('input').value = ''" style="display:flex;gap:0.25rem;">
+                                <input type="text" placeholder="Add model name..." style="padding:0.2rem 0.5rem;font-size:0.8rem;width:170px;">
+                                <button type="submit" class="small" style="padding:0.2rem 0.5rem;">+</button>
+                            </form>
+                        </div>
+
+                        <template x-if="!isCollapsed(p.id)">
+                            <div>
+                                <template x-if="!p.models || p.models.length === 0">
+                                    <div class="text-muted" style="padding:0.5rem 0;">
+                                        No models. Click <strong>Scan</strong> to auto-detect, or type a model name and press +.
+                                    </div>
+                                </template>
+
+                                <template x-for="m in p.models || []" :key="m.id">
+                                    <div class="model-row">
+                                <div style="display:flex;align-items:center;gap:0.4rem;">
+                                    <span style="font-size:0.9rem;" x-text="m.name"></span>
+                                    <span class="badge" :class="m.is_auto_detected ? 'badge-auto' : 'badge-manual'"
+                                          x-text="m.is_auto_detected ? 'auto' : 'manual'"></span>
+                                </div>
+                                <div class="row-actions">
+                                    <span class="toggle-switch" @click="toggleModel(p.id, m.id)" title="Enable/disable model">
+                                        <input type="checkbox" :checked="m.is_enabled">
+                                        <span class="toggle-slider"></span>
+                                    </span>
+                                    <button class="small secondary" @click="deleteModel(p.id, m.id)"
+                                            style="padding:0.1rem 0.35rem;font-size:0.7rem;" title="Remove model">✕</button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </template>
+	</div>
+</template>
+</div>
+
+<!-- ===================== ADD PROVIDER MODAL ===================== -->
+<dialog id="add-modal">
+    <article>
+        <header>
+            <h3>Add Provider</h3>
+        </header>
+        <form id="add-form" onsubmit="event.preventDefault(); submitAddForm();">
+            <label>
+                Name
+                <input id="add-name" type="text" placeholder="e.g. OpenAI, Ollama, Anthropic" required>
+            </label>
+            <label>
+                Base URL
+                <input id="add-url" type="url" placeholder="https://api.openai.com" required>
+            </label>
+            <label>
+                API Key
+                <input id="add-key" type="password" placeholder="sk-... (leave blank if not needed)">
+            </label>
+            <label>
+                Timeout (seconds)
+                <input id="add-timeout" type="number" value="60" min="5">
+            </label>
+            <footer style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="secondary" onclick="document.getElementById('add-modal').close()">Cancel</button>
+                <button type="submit">Save</button>
+            </footer>
+        </form>
+    </article>
+</dialog>
+
+<!-- ===================== EDIT PROVIDER MODAL ===================== -->
+<dialog id="edit-modal">
+    <article>
+        <header>
+            <h3>Edit Provider</h3>
+        </header>
+        <form id="edit-form" onsubmit="event.preventDefault(); submitEditForm();">
+            <input id="edit-id" type="hidden">
+            <label>
+                Name
+                <input id="edit-name" type="text" required>
+            </label>
+            <label>
+                Base URL
+                <input id="edit-url" type="url" required>
+            </label>
+            <label>
+                API Key <small style="color:#888;">(leave blank to keep current)</small>
+                <input id="edit-key" type="password" placeholder="Leave blank to keep current">
+            </label>
+            <label>
+                Timeout (seconds)
+                <input id="edit-timeout" type="number" min="5">
+            </label>
+            <footer style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="secondary" onclick="document.getElementById('edit-modal').close()">Cancel</button>
+                <button type="submit">Save</button>
+            </footer>
+        </form>
+    </article>
+</dialog>
+
+<script>
+    function submitAddForm() {
+        const data = {
+            name: document.getElementById('add-name').value,
+            base_url: document.getElementById('add-url').value,
+            api_key: document.getElementById('add-key').value || '',
+            timeout: parseInt(document.getElementById('add-timeout').value) || 60,
+            priority: 0,
+            is_active: true,
+        };
+        fetch('/api/providers', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data),
+        }).then(resp => {
+            if (resp.ok) {
+                document.getElementById('add-modal').close();
+                location.reload();
+            } else {
+                resp.json().then(err => alert(err.detail || 'Failed to add provider'));
+            }
+        });
+    }
+
+    function openEdit(p) {
+        document.getElementById('edit-id').value = p.id;
+        document.getElementById('edit-name').value = p.name;
+        document.getElementById('edit-url').value = p.base_url;
+        document.getElementById('edit-key').value = '';
+        document.getElementById('edit-timeout').value = p.timeout || 60;
+        document.getElementById('edit-modal').showModal();
+    }
+
+    function submitEditForm() {
+        const id = document.getElementById('edit-id').value;
+        const data = {
+            name: document.getElementById('edit-name').value,
+            base_url: document.getElementById('edit-url').value,
+            timeout: parseInt(document.getElementById('edit-timeout').value) || 60,
+        };
+        const key = document.getElementById('edit-key').value;
+        if (key) data.api_key = key;
+
+        fetch(`/api/providers/${id}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data),
+        }).then(resp => {
+            if (resp.ok) {
+                document.getElementById('edit-modal').close();
+                location.reload();
+            } else {
+                resp.json().then(err => alert(err.detail || 'Failed to update provider'));
+            }
+        });
+	}
+	</script>
+	{% endblock %}
