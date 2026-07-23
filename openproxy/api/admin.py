@@ -598,8 +598,10 @@ async def list_model_sets(session: AsyncSession = Depends(get_session)):
             "id": s.id,
             "name": s.name,
             "is_default": s.is_default,
+            "is_system": s.is_system,
             "entries": entries,
             "created_at": s.created_at.isoformat() if s.created_at else None,
+            "last_synced": s.last_synced.isoformat() if s.last_synced else None,
         })
     return output
 
@@ -609,6 +611,13 @@ async def create_model_set(
     data: ModelSetCreate,
     session: AsyncSession = Depends(get_session),
 ):
+    # Block creation of a set that would shadow the auto-managed system set
+    if data.name == "AutoFreeModels":
+        raise HTTPException(
+            status_code=409,
+            detail="'AutoFreeModels' is a reserved name managed by the system",
+        )
+
     existing = await session.execute(
         select(ModelSet).where(ModelSet.name == data.name)
     )
@@ -647,8 +656,10 @@ async def create_model_set(
         "id": model_set.id,
         "name": model_set.name,
         "is_default": model_set.is_default,
+        "is_system": model_set.is_system,
         "entries": entries_list,
         "created_at": model_set.created_at.isoformat() if model_set.created_at else None,
+        "last_synced": model_set.last_synced.isoformat() if model_set.last_synced else None,
     }
 
 
@@ -667,6 +678,13 @@ async def update_model_set(
     model_set = result.scalar_one_or_none()
     if not model_set:
         raise HTTPException(status_code=404, detail="Model set not found")
+
+    # System sets cannot be renamed
+    if model_set.is_system and data.name != model_set.name:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot rename a system-managed model set",
+        )
 
     if data.is_default:
         await session.execute(
@@ -695,8 +713,10 @@ async def update_model_set(
         "id": model_set.id,
         "name": model_set.name,
         "is_default": model_set.is_default,
+        "is_system": model_set.is_system,
         "entries": entries_list,
         "created_at": model_set.created_at.isoformat() if model_set.created_at else None,
+        "last_synced": model_set.last_synced.isoformat() if model_set.last_synced else None,
     }
 
 
@@ -708,6 +728,11 @@ async def delete_model_set(
     model_set = await session.get(ModelSet, set_id)
     if not model_set:
         raise HTTPException(status_code=404, detail="Model set not found")
+    if model_set.is_system:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot delete a system-managed model set",
+        )
     await session.delete(model_set)
     await session.commit()
 
@@ -738,6 +763,11 @@ async def add_model_set_entry(
     model_set = await session.get(ModelSet, set_id)
     if not model_set:
         raise HTTPException(status_code=404, detail="Model set not found")
+    if model_set.is_system:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot add entries to a system-managed model set",
+        )
 
     provider = await session.get(Provider, data.provider_id)
     if not provider:
@@ -778,6 +808,12 @@ async def delete_model_set_entry(
     entry_id: int,
     session: AsyncSession = Depends(get_session),
 ):
+    model_set = await session.get(ModelSet, set_id)
+    if model_set and model_set.is_system:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot delete entries from a system-managed model set",
+        )
     entry = await session.get(ModelSetEntry, entry_id)
     if not entry or entry.model_set_id != set_id:
         raise HTTPException(status_code=404, detail="Entry not found")
@@ -837,3 +873,54 @@ async def reorder_model_set_entries(
         )
     await session.commit()
     return {"status": "ok"}
+
+
+@router.post("/model-sets/{set_id}/sync")
+async def sync_model_set(
+    set_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """Force a sync of a system-managed model set (e.g. AutoFreeModels)."""
+    model_set = await session.get(ModelSet, set_id)
+    if not model_set:
+        raise HTTPException(status_code=404, detail="Model set not found")
+    if not model_set.is_system:
+        raise HTTPException(
+            status_code=400,
+            detail="Only system-managed model sets can be synced",
+        )
+
+    from openproxy.auto_free_models import sync_auto_free_models
+
+    await sync_auto_free_models()
+
+    # Re-fetch the set with relationships and return it
+    stmt = (
+        select(ModelSet)
+        .options(selectinload(ModelSet.entries).selectinload(ModelSetEntry.provider))
+        .where(ModelSet.id == set_id)
+    )
+    result = await session.execute(stmt)
+    model_set = result.scalar_one()
+
+    entries_list = []
+    for e in model_set.entries:
+        entries_list.append({
+            "id": e.id,
+            "model_set_id": e.model_set_id,
+            "provider_id": e.provider_id,
+            "provider_name": e.provider.name if e.provider else "deleted",
+            "model_name": e.model_name,
+            "priority": e.priority,
+            "is_enabled": e.is_enabled,
+        })
+
+    return {
+        "id": model_set.id,
+        "name": model_set.name,
+        "is_default": model_set.is_default,
+        "is_system": model_set.is_system,
+        "entries": entries_list,
+        "created_at": model_set.created_at.isoformat() if model_set.created_at else None,
+        "last_synced": model_set.last_synced.isoformat() if model_set.last_synced else None,
+    }

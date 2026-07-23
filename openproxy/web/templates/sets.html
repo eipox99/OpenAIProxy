@@ -33,6 +33,9 @@
                             <button class="outline" :class="selectedSetId === s.id ? 'primary' : 'secondary'"
                                     @click="selectSet(s.id)" style="font-size:0.85rem;">
                                 <span x-text="s.name"></span>
+                                <template x-if="s.is_system">
+                                    <span style="font-size:0.7rem;background:#333;border-radius:4px;padding:1px 5px;margin-left:4px;">🔄 Auto</span>
+                                </template>
                             </button>
                         </template>
                         <button class="outline" onclick="openCreateModal()" style="font-size:0.85rem;">➕ New</button>
@@ -43,10 +46,17 @@
                         <div>
                             <!-- Set name + actions -->
                             <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap;">
-                                <template x-if="!editingName">
+                                <template x-if="!editingName && !selectedSet.is_system">
                                     <h2 style="margin:0;font-size:1.2rem;cursor:pointer;" @click="startRename()">
                                         <span x-text="selectedSet.name"></span>
                                         <span style="font-size:0.75rem;color:#666;margin-left:0.3rem;">✏️</span>
+                                    </h2>
+                                </template>
+                                <template x-if="!editingName && selectedSet.is_system">
+                                    <h2 style="margin:0;font-size:1.2rem;">
+                                        <span x-text="selectedSet.name"></span>
+                                        <span style="font-size:0.7rem;background:#333;border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:middle;">🔄 Auto-managed</span>
+                                        <button class="small" @click="forceSync(selectedSet.id)" style="margin-left:0.5rem;font-size:0.7rem;padding:1px 6px;">⟳ Force Sync</button>
                                     </h2>
                                 </template>
                                 <template x-if="editingName">
@@ -56,8 +66,13 @@
                                         <button type="button" class="small secondary" @click="editingName = false" style="padding:0.2rem 0.5rem;">Cancel</button>
                                     </form>
                                 </template>
-                                <button class="small secondary" @click="deleteSet(selectedSet.id, selectedSet.name)"
-                                        style="margin-left:auto;font-size:0.75rem;">🗑️ Delete Set</button>
+                                <template x-if="selectedSet.last_synced">
+                                    <span style="font-size:0.75rem;color:#888;" x-text="'Last synced: ' + formatTimeAgo(selectedSet.last_synced)"></span>
+                                </template>
+                                <template x-if="!selectedSet.is_system">
+                                    <button class="small secondary" @click="deleteSet(selectedSet.id, selectedSet.name)"
+                                            style="margin-left:auto;font-size:0.75rem;">🗑️ Delete Set</button>
+                                </template>
                             </div>
 
                             <!-- Entries table -->
@@ -108,8 +123,10 @@
                                                 </template>
                                             </td>
                                             <td>
-                                                <button class="small secondary" @click="deleteEntry(e.id)"
-                                                        style="padding:0.1rem 0.3rem;font-size:0.7rem;">✕</button>
+                                                <template x-if="!selectedSet.is_system">
+                                                    <button class="small secondary" @click="deleteEntry(e.id)"
+                                                            style="padding:0.1rem 0.3rem;font-size:0.7rem;">✕</button>
+                                                </template>
                                             </td>
                                         </tr>
                                     </template>
@@ -123,6 +140,7 @@
                             </template>
 
                             <!-- Add entry form -->
+                            <template x-if="!selectedSet.is_system">
                             <div class="model-header-row" style="margin-top:1rem;padding-top:1rem;border-top:1px solid #222;">
                                 <span style="font-weight:600;font-size:0.9rem;">➕ Add Entry</span>
                                 <form @submit.prevent="addEntry()" style="display:flex;gap:0.5rem;margin-left:auto;flex-wrap:wrap;">
@@ -153,6 +171,7 @@
                                     <button type="submit" class="small" style="padding:0.2rem 0.5rem;">+ Add</button>
                                 </form>
                             </div>
+                            </template>
                         </div>
                     </template>
                 </div>

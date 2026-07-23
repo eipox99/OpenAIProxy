@@ -23,6 +23,7 @@ from openproxy.api import chat as chat_api
 from openproxy.api import embeddings as embeddings_api
 from openproxy.api import models as models_api
 from openproxy.api import admin as admin_api
+from openproxy.auto_free_models import sync_auto_free_models
 from openproxy.web import routes as web_routes
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,29 @@ async def _watchdog_loop() -> None:
             logger.exception("Watchdog health check failed")
 
 
+async def _auto_free_loop() -> None:
+    """Periodically sync the AutoFreeModels model set every 30 minutes.
+
+    Runs an initial sync on startup and then every 1800 seconds afterward.
+    Errors are caught and logged per cycle so a single failure doesn't
+    kill the loop.
+    """
+    logger.info("AutoFreeModels: starting initial sync")
+    try:
+        await sync_auto_free_models()
+    except Exception:
+        logger.exception("AutoFreeModels: initial sync failed")
+
+    while True:
+        try:
+            await asyncio.sleep(1800)
+            await sync_auto_free_models()
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("AutoFreeModels: sync cycle failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Create database tables and seed default settings on startup."""
@@ -77,14 +101,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Start the background watchdog
     watchdog_task = asyncio.create_task(_watchdog_loop(), name="watchdog")
+    # Start the AutoFreeModels sync loop
+    auto_free_task = asyncio.create_task(_auto_free_loop(), name="auto_free")
     logger.info("Application started")
 
     yield
 
     # Clean shutdown
     watchdog_task.cancel()
+    auto_free_task.cancel()
     try:
         await watchdog_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await auto_free_task
     except asyncio.CancelledError:
         pass
     await engine.dispose()
