@@ -42,6 +42,50 @@ def normalize_base_url(url: str) -> str:
     return url
 
 
+def _compute_entry_status(
+    entry: ModelSetEntry, now: datetime.datetime
+) -> dict:
+    """Compute the current availability status of a model set entry.
+
+    Returns a dict with ``key`` (machine-readable) and ``label``
+    (human-readable), or ``None`` if the entry is available.
+    """
+    if not entry.is_enabled:
+        return {"key": "entry_disabled", "label": "Entry disabled"}
+    provider = entry.provider
+    if provider is None:
+        return {"key": "provider_deleted", "label": "Provider deleted"}
+    if not provider.is_active:
+        return {"key": "provider_inactive", "label": "Provider inactive"}
+    if provider.cooldown_until and provider.cooldown_until > now:
+        remaining = int((provider.cooldown_until - now).total_seconds())
+        return {"key": "cooldown", "label": f"Cooldown {remaining}s"}
+    if not provider.models:
+        return {"key": "ok", "label": "Available"}
+    # Optionally check if this specific model is enabled on the provider
+    model_match = [m for m in provider.models if m.name == entry.model_name]
+    if model_match and not model_match[0].is_enabled:
+        return {"key": "model_disabled", "label": "Model disabled on provider"}
+    return {"key": "ok", "label": "Available"}
+
+
+def _entry_to_dict(
+    e: ModelSetEntry, now: datetime.datetime
+) -> dict:
+    """Serialize a ModelSetEntry to a dict, including its computed status."""
+    return {
+        "id": e.id,
+        "model_set_id": e.model_set_id,
+        "provider_id": e.provider_id,
+        "provider_name": e.provider.name if e.provider else "deleted",
+        "model_name": e.model_name,
+        "priority": e.priority,
+        "overrides": json.loads(e.overrides) if e.overrides else {},
+        "is_enabled": e.is_enabled,
+        "status": _compute_entry_status(e, now),
+    }
+
+
 # ============================================================
 # Provider CRUD
 # ============================================================
@@ -592,19 +636,11 @@ async def list_model_sets(session: AsyncSession = Depends(get_session)):
     result = await session.execute(stmt)
     sets = result.scalars().unique().all()
     output = []
+    now = datetime.datetime.now()
     for s in sets:
         entries = []
         for e in s.entries:
-            entries.append({
-                "id": e.id,
-                "model_set_id": e.model_set_id,
-                "provider_id": e.provider_id,
-                "provider_name": e.provider.name if e.provider else "deleted",
-                "model_name": e.model_name,
-                "priority": e.priority,
-                "overrides": json.loads(e.overrides) if e.overrides else {},
-                "is_enabled": e.is_enabled,
-            })
+            entries.append(_entry_to_dict(e, now))
         output.append({
             "id": s.id,
             "name": s.name,
@@ -652,17 +688,10 @@ async def create_model_set(
     )
     result = await session.execute(stmt)
     model_set = result.scalar_one()
+    now = datetime.datetime.now()
     entries_list = []
     for e in model_set.entries:
-        entries_list.append({
-            "id": e.id,
-            "model_set_id": e.model_set_id,
-            "provider_id": e.provider_id,
-            "provider_name": e.provider.name if e.provider else "deleted",
-            "model_name": e.model_name,
-            "priority": e.priority,
-            "is_enabled": e.is_enabled,
-        })
+        entries_list.append(_entry_to_dict(e, now))
     return {
         "id": model_set.id,
         "name": model_set.name,
@@ -709,17 +738,10 @@ async def update_model_set(
     # Re-fetch with relationships
     result = await session.execute(stmt)
     model_set = result.scalar_one()
+    now = datetime.datetime.now()
     entries_list = []
     for e in model_set.entries:
-        entries_list.append({
-            "id": e.id,
-            "model_set_id": e.model_set_id,
-            "provider_id": e.provider_id,
-            "provider_name": e.provider.name if e.provider else "deleted",
-            "model_name": e.model_name,
-            "priority": e.priority,
-            "is_enabled": e.is_enabled,
-        })
+        entries_list.append(_entry_to_dict(e, now))
     return {
         "id": model_set.id,
         "name": model_set.name,
@@ -922,17 +944,10 @@ async def sync_model_set(
     result = await session.execute(stmt)
     model_set = result.scalar_one()
 
+    now = datetime.datetime.now()
     entries_list = []
     for e in model_set.entries:
-        entries_list.append({
-            "id": e.id,
-            "model_set_id": e.model_set_id,
-            "provider_id": e.provider_id,
-            "provider_name": e.provider.name if e.provider else "deleted",
-            "model_name": e.model_name,
-            "priority": e.priority,
-            "is_enabled": e.is_enabled,
-        })
+        entries_list.append(_entry_to_dict(e, now))
 
     return {
         "id": model_set.id,
@@ -975,17 +990,10 @@ async def reorder_model_set_by_size(
     result = await session.execute(stmt)
     model_set = result.scalar_one()
 
+    now = datetime.datetime.now()
     entries_list = []
     for e in model_set.entries:
-        entries_list.append({
-            "id": e.id,
-            "model_set_id": e.model_set_id,
-            "provider_id": e.provider_id,
-            "provider_name": e.provider.name if e.provider else "deleted",
-            "model_name": e.model_name,
-            "priority": e.priority,
-            "is_enabled": e.is_enabled,
-        })
+        entries_list.append(_entry_to_dict(e, now))
 
     return {
         "id": model_set.id,
