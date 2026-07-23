@@ -19,3 +19,4 @@ data/*.db
 .idea/
 *.swp
 *.swo
+*.txt
