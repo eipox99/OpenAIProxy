@@ -83,6 +83,7 @@
                                         <th>#</th>
                                         <th>Model</th>
                                         <th>Provider</th>
+                                        <th>Status</th>
                                         <th>Enabled</th>
                                         <th>Overrides</th>
                                         <th></th>
@@ -100,6 +101,11 @@
                                             </td>
                                             <td><code x-text="e.model_name" style="font-size:0.85rem;"></code></td>
                                             <td x-text="e.provider_name" style="font-size:0.85rem;"></td>
+                                            <td>
+                                                <template x-if="e.status">
+                                                    <span :style="entryStatusStyle(e.status)" x-text="e.status.label"></span>
+                                                </template>
+                                            </td>
                                             <td>
                                                 <span class="toggle-switch" @click="toggleEntry(e.id)">
                                                     <input type="checkbox" :checked="e.is_enabled">

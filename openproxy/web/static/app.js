@@ -209,6 +209,18 @@ function modelSetsData() {
             const days = Math.floor(hours / 24);
             return days + 'd ago';
         },
+        entryStatusStyle(status) {
+            if (!status) return 'font-size:0.8rem;color:#888;';
+            const s = {
+                ok: 'font-size:0.75rem;color:#2fb344;',
+                cooldown: 'font-size:0.75rem;color:#f5a623;font-weight:600;',
+                entry_disabled: 'font-size:0.75rem;color:#888;font-style:italic;',
+                provider_inactive: 'font-size:0.75rem;color:#ff5050;',
+                provider_deleted: 'font-size:0.75rem;color:#ff5050;font-weight:600;',
+                model_disabled: 'font-size:0.75rem;color:#f5a623;',
+            };
+            return s[status.key] || 'font-size:0.8rem;color:#888;';
+        },
         startEditOverrides(entry) {
             entry._editingOverrides = true;
             entry._overridesText = JSON.stringify(entry.overrides || {});
