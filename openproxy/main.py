@@ -88,22 +88,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Migrate existing tables: add columns added in newer versions
         from sqlalchemy import inspect as sa_inspect
 
-        inspector = await conn.run_sync(sa_inspect)
-        model_set_cols = {c["name"] for c in inspector.get_columns("model_sets")}
-        if "is_system" not in model_set_cols:
-            await conn.execute(
-                text(
-                    "ALTER TABLE model_sets ADD COLUMN is_system BOOLEAN NOT NULL DEFAULT 0"
+        def _migrate_model_sets(sync_conn):
+            inspector = sa_inspect(sync_conn)
+            model_set_cols = {c["name"] for c in inspector.get_columns("model_sets")}
+            if "is_system" not in model_set_cols:
+                sync_conn.execute(
+                    text(
+                        "ALTER TABLE model_sets ADD COLUMN is_system BOOLEAN NOT NULL DEFAULT 0"
+                    )
                 )
-            )
-            logger.info("Migration: added is_system column to model_sets")
-        if "last_synced" not in model_set_cols:
-            await conn.execute(
-                text(
-                    "ALTER TABLE model_sets ADD COLUMN last_synced DATETIME"
+                logger.info("Migration: added is_system column to model_sets")
+            if "last_synced" not in model_set_cols:
+                sync_conn.execute(
+                    text(
+                        "ALTER TABLE model_sets ADD COLUMN last_synced DATETIME"
+                    )
                 )
-            )
-            logger.info("Migration: added last_synced column to model_sets")
+                logger.info("Migration: added last_synced column to model_sets")
+
+        await conn.run_sync(_migrate_model_sets)
     # Seed default settings
     async with async_session_factory() as session:
         from openproxy.utils.settings_helper import DEFAULTS
