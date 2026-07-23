@@ -7,9 +7,4 @@ services:
     volumes:
       - /mnt/user/appdata/OpenAIProxy/data:/app/data
       - /mnt/user/appdata/OpenAIProxy/.env:/app/.env:ro
-    environment:
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - AUTH_TOKEN=${AUTH_TOKEN}
-      - HOST=0.0.0.0
-      - PORT=8000
     restart: unless-stopped
