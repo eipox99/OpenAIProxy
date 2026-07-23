@@ -235,6 +235,37 @@ async def proxy_chat_completion(
                                 )
                             continue
 
+                        # Detect context-length truncation and failover
+                        choices = data.get("choices", [])
+                        finish_reason = choices[0].get("finish_reason") if choices else None
+                        if finish_reason == "length":
+                            classified = ClassifiedError(
+                                ErrorType.RATE_LIMIT,
+                                f"Context length exceeded on {provider.name}:{model_name}",
+                                status_code=resp.status_code,
+                            )
+                            await record_failure(session, provider)
+                            await _safe_failover_log(
+                                session=session,
+                                request_id=request_id,
+                                provider_id=provider.id,
+                                model=model_name,
+                                error_type=classified.error_type.value,
+                                latency_ms=latency,
+                            )
+                            last_error = f"[{provider.name}:{model_name}] truncated (finish_reason=length)"
+                            logger.warning(
+                                "Chat failover (context length)",
+                                extra={
+                                    "request_id": request_id,
+                                    "provider": provider.name,
+                                    "model": model_name,
+                                    "error_type": "context_length",
+                                    "latency_ms": latency,
+                                },
+                            )
+                            continue
+
                         # Genuine success
                         await record_success(session, provider)
                         usage = data.get("usage", {})
@@ -491,6 +522,35 @@ async def proxy_streaming_chat_completion(
                                     {"error": f"Non-retryable error from {provider.name}: {classified}"}
                                 ).encode()
                                 return
+                            continue
+
+                        # Detect context-length truncation in SSE stream
+                        if b'"finish_reason":"length"' in body or b"'finish_reason': 'length'" in body:
+                            classified = ClassifiedError(
+                                ErrorType.RATE_LIMIT,
+                                f"Context length exceeded on {provider.name}:{model_name}",
+                            )
+                            await record_failure(session, provider)
+                            await _safe_stream_failover_log(
+                                session=session,
+                                request_id=request_id,
+                                provider_id=provider.id,
+                                model=model_name,
+                                error_type=classified.error_type.value,
+                                latency_ms=latency,
+                            )
+                            last_error = f"[{provider.name}:{model_name}] truncated (finish_reason=length)"
+                            retryable = is_retryable(classified.error_type)
+                            logger.warning(
+                                "Streaming failover (context length)",
+                                extra={
+                                    "request_id": request_id,
+                                    "provider": provider.name,
+                                    "model": model_name,
+                                    "error_type": "context_length",
+                                    "latency_ms": latency,
+                                },
+                            )
                             continue
 
                         # Genuine SSE stream — yield the entire body
