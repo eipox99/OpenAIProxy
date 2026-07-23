@@ -9,7 +9,6 @@ on:
       - ".env.example"
       - ".gitignore"
       - ".dockerignore"
-      - ".github/**"
 
 jobs:
   build-and-push:
