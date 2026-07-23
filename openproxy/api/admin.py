@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 from typing import Any
 
 import httpx
@@ -27,6 +28,8 @@ from openproxy.schemas import (
     StatsResponse,
 )
 from openproxy.utils.encryption import decrypt_api_key, encrypt_api_key
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
@@ -900,7 +903,15 @@ async def sync_model_set(
 
     from openproxy.auto_free_models import sync_auto_free_models
 
-    await sync_auto_free_models()
+    try:
+        await sync_auto_free_models()
+    except Exception as exc:
+        logger.exception("Force sync failed")
+        raise HTTPException(status_code=500, detail=f"Sync failed: {exc}")
+
+    # Expire the stale model_set from the identity map so the next
+    # select fetches fresh data from the database.
+    await session.refresh(model_set)
 
     # Re-fetch the set with relationships and return it
     stmt = (

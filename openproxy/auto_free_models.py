@@ -197,14 +197,28 @@ async def sync_auto_free_models() -> None:
                 key=lambda e: _extract_param_size(e.model_name),
                 reverse=True,
             )
-            for idx, entry in enumerate(sorted_entries, start=1):
-                if entry.priority != idx:
+            # Collect entries that need a new priority
+            to_move = [
+                (idx, entry)
+                for idx, entry in enumerate(sorted_entries, start=1)
+                if entry.priority != idx
+            ]
+            if to_move:
+                # Two-phase update to avoid unique constraint violations
+                # on (model_set_id, priority).
+                for idx, entry in to_move:
+                    await session.execute(
+                        update(ModelSetEntry)
+                        .where(ModelSetEntry.id == entry.id)
+                        .values(priority=-idx)
+                    )
+                for idx, entry in to_move:
                     await session.execute(
                         update(ModelSetEntry)
                         .where(ModelSetEntry.id == entry.id)
                         .values(priority=idx)
                     )
-                    reordered = True
+                reordered = True
 
         if added or removed or reordered:
             model_set.last_synced = datetime.datetime.now()
