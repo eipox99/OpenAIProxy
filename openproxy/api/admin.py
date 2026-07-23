@@ -573,6 +573,14 @@ async def get_logs_count(
 
 @router.get("/model-sets")
 async def list_model_sets(session: AsyncSession = Depends(get_session)):
+    # Ensure the AutoFreeModels system set exists
+    existing = await session.execute(
+        select(ModelSet).where(ModelSet.name == "AutoFreeModels")
+    )
+    if not existing.scalar_one_or_none():
+        session.add(ModelSet(name="AutoFreeModels", is_system=True))
+        await session.commit()
+
     stmt = (
         select(ModelSet)
         .options(selectinload(ModelSet.entries).selectinload(ModelSetEntry.provider))
