@@ -8,7 +8,9 @@ RUN pip install --no-cache-dir -e .
 
 # Copy application
 COPY openproxy/ openproxy/
-COPY data/ data/
+
+# Create data directory (mounted as a volume at runtime)
+RUN mkdir -p /app/data
 
 # Expose port
 EXPOSE 8000
