@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -24,6 +25,8 @@ from openproxy.router.provider_manager import (
     record_success,
 )
 from openproxy.utils.encryption import decrypt_api_key
+
+logger = logging.getLogger(__name__)
 
 
 async def _log_usage(
@@ -74,8 +77,21 @@ async def proxy_chat_completion(
     """
     request_id = str(uuid.uuid4())
     entries = await get_model_set_entries(session, set_name)
+    logger.info(
+        "Chat request start",
+        extra={
+            "request_id": request_id,
+            "set_name": set_name,
+            "entry_count": len(entries),
+            "stream": False,
+        },
+    )
 
     if not entries:
+        logger.warning(
+            "No entries for model set",
+            extra={"request_id": request_id, "set_name": set_name},
+        )
         raise RuntimeError(
             f"No entries found for model set '{set_name}'. "
             "Check that the set has enabled entries with active providers."
@@ -87,6 +103,16 @@ async def proxy_chat_completion(
     last_error: str | None = None
     async with httpx.AsyncClient(timeout=60.0) as client:
         for attempt in range(retry_limit + 1):
+            if attempt > 0:
+                logger.info(
+                    "Retry attempt",
+                    extra={
+                        "request_id": request_id,
+                        "set_name": set_name,
+                        "attempt": attempt,
+                        "max_attempts": retry_limit + 1,
+                    },
+                )
             all_retryable = True
             for provider, model_name, overrides in entries:
                 api_key = decrypt_api_key(provider.api_key)
@@ -123,6 +149,15 @@ async def proxy_chat_completion(
                             completion_tokens=usage.get("completion_tokens"),
                         )
                         await session.commit()
+                        logger.info(
+                            "Chat success",
+                            extra={
+                                "request_id": request_id,
+                                "provider": provider.name,
+                                "model": model_name,
+                                "latency_ms": latency,
+                            },
+                        )
                         return data
 
                     # Failure
@@ -140,7 +175,28 @@ async def proxy_chat_completion(
                     await session.commit()
                     last_error = f"[{provider.name}:{model_name}] {classified}"
 
-                    if not is_retryable(classified.error_type):
+                    retryable = is_retryable(classified.error_type)
+                    cb_active = (
+                        provider.cooldown_until is not None
+                        if provider.consecutive_failures >= 0
+                        else False
+                    )
+                    logger.warning(
+                        "Chat failover",
+                        extra={
+                            "request_id": request_id,
+                            "provider": provider.name,
+                            "model": model_name,
+                            "error_type": classified.error_type.value,
+                            "error_detail": str(classified),
+                            "retryable": retryable,
+                            "consecutive_failures": provider.consecutive_failures,
+                            "circuit_breaker_active": cb_active,
+                            "latency_ms": latency,
+                        },
+                    )
+
+                    if not retryable:
                         raise RuntimeError(
                             f"Non-retryable error from {provider.name}: {classified}"
                         )
@@ -161,6 +217,24 @@ async def proxy_chat_completion(
                     )
                     await session.commit()
                     last_error = f"[{provider.name}:{model_name}] {classified}"
+                    cb_active = (
+                        provider.cooldown_until is not None
+                        if provider.consecutive_failures >= 0
+                        else False
+                    )
+                    logger.warning(
+                        "Chat connection error",
+                        extra={
+                            "request_id": request_id,
+                            "provider": provider.name,
+                            "model": model_name,
+                            "error_type": classified.error_type.value,
+                            "error_detail": str(exc),
+                            "consecutive_failures": provider.consecutive_failures,
+                            "circuit_breaker_active": cb_active,
+                            "latency_ms": latency,
+                        },
+                    )
 
             # All entries failed this round with retryable errors
             if attempt < retry_limit:
@@ -168,6 +242,15 @@ async def proxy_chat_completion(
                 continue
             break
 
+    logger.error(
+        "All retries exhausted",
+        extra={
+            "request_id": request_id,
+            "set_name": set_name,
+            "attempts": retry_limit + 1,
+            "last_error": last_error,
+        },
+    )
     raise RuntimeError(
         f"All model set entries failed for '{set_name}' after {retry_limit + 1} attempts. Last error: {last_error}"
     )
@@ -184,8 +267,21 @@ async def proxy_streaming_chat_completion(
     """
     request_id = str(uuid.uuid4())
     entries = await get_model_set_entries(session, set_name)
+    logger.info(
+        "Streaming request start",
+        extra={
+            "request_id": request_id,
+            "set_name": set_name,
+            "entry_count": len(entries),
+            "stream": True,
+        },
+    )
 
     if not entries:
+        logger.warning(
+            "No entries for model set (streaming)",
+            extra={"request_id": request_id, "set_name": set_name},
+        )
         yield json.dumps({"error": f"No entries found for model set '{set_name}'"}).encode()
         return
 
@@ -195,6 +291,16 @@ async def proxy_streaming_chat_completion(
     last_error: str | None = None
     async with httpx.AsyncClient(timeout=60.0) as client:
         for attempt in range(retry_limit + 1):
+            if attempt > 0:
+                logger.info(
+                    "Streaming retry attempt",
+                    extra={
+                        "request_id": request_id,
+                        "set_name": set_name,
+                        "attempt": attempt,
+                        "max_attempts": retry_limit + 1,
+                    },
+                )
             for provider, model_name, overrides in entries:
                 api_key = decrypt_api_key(provider.api_key)
                 url = f"{provider.base_url.rstrip('/')}/v1/chat/completions"
@@ -226,9 +332,23 @@ async def proxy_streaming_chat_completion(
                                 latency_ms=latency,
                             )
                             await session.commit()
+                            error_type = classified.error_type.value if classified else "unknown"
                             last_error = f"[{provider.name}:{model_name}] HTTP {resp.status_code}: {error_text[:200]}"
+                            retryable = is_retryable(classified.error_type) if classified else True
+                            logger.warning(
+                                "Streaming failover",
+                                extra={
+                                    "request_id": request_id,
+                                    "provider": provider.name,
+                                    "model": model_name,
+                                    "error_type": error_type,
+                                    "error_detail": error_text[:200].decode(errors="replace"),
+                                    "retryable": retryable,
+                                    "latency_ms": latency,
+                                },
+                            )
 
-                            if classified and not is_retryable(classified.error_type):
+                            if classified and not retryable:
                                 yield json.dumps(
                                     {"error": f"Non-retryable error from {provider.name}: {classified}"}
                                 ).encode()
@@ -255,6 +375,16 @@ async def proxy_streaming_chat_completion(
                             completion_tokens=token_count,
                         )
                         await session.commit()
+                        logger.info(
+                            "Streaming success",
+                            extra={
+                                "request_id": request_id,
+                                "provider": provider.name,
+                                "model": model_name,
+                                "latency_ms": latency,
+                                "completion_tokens": token_count,
+                            },
+                        )
                         return  # done
 
                 except httpx.HTTPError as exc:
@@ -273,12 +403,32 @@ async def proxy_streaming_chat_completion(
                     )
                     await session.commit()
                     last_error = f"[{provider.name}:{model_name}] {classified}"
+                    logger.warning(
+                        "Streaming connection error",
+                        extra={
+                            "request_id": request_id,
+                            "provider": provider.name,
+                            "model": model_name,
+                            "error_type": classified.error_type.value,
+                            "error_detail": str(exc),
+                            "latency_ms": latency,
+                        },
+                    )
 
             if attempt < retry_limit:
                 await asyncio.sleep(1)
                 continue
             break
 
+    logger.error(
+        "Streaming all retries exhausted",
+        extra={
+            "request_id": request_id,
+            "set_name": set_name,
+            "attempts": retry_limit + 1,
+            "last_error": last_error,
+        },
+    )
     yield json.dumps(
         {"error": f"All model set entries failed for '{set_name}'. Last error: {last_error}"}
     ).encode()
@@ -292,8 +442,20 @@ async def proxy_embedding(
     """Proxy an embedding request through a model set."""
     request_id = str(uuid.uuid4())
     entries = await get_model_set_entries(session, set_name)
+    logger.info(
+        "Embedding request start",
+        extra={
+            "request_id": request_id,
+            "set_name": set_name,
+            "entry_count": len(entries),
+        },
+    )
 
     if not entries:
+        logger.warning(
+            "No entries for model set (embedding)",
+            extra={"request_id": request_id, "set_name": set_name},
+        )
         raise RuntimeError(f"No entries found for model set '{set_name}'.")
 
     last_error: str | None = None
@@ -331,6 +493,15 @@ async def proxy_embedding(
                         prompt_tokens=usage.get("prompt_tokens"),
                     )
                     await session.commit()
+                    logger.info(
+                        "Embedding success",
+                        extra={
+                            "request_id": request_id,
+                            "provider": provider.name,
+                            "model": model_name,
+                            "latency_ms": latency,
+                        },
+                    )
                     return data
 
                 await record_failure(session, provider)
@@ -346,6 +517,17 @@ async def proxy_embedding(
                 )
                 await session.commit()
                 last_error = f"[{provider.name}:{model_name}] {classified}"
+                logger.warning(
+                    "Embedding failover",
+                    extra={
+                        "request_id": request_id,
+                        "provider": provider.name,
+                        "model": model_name,
+                        "error_type": classified.error_type.value,
+                        "error_detail": str(classified),
+                        "latency_ms": latency,
+                    },
+                )
 
                 if not is_retryable(classified.error_type):
                     raise RuntimeError(
@@ -368,6 +550,17 @@ async def proxy_embedding(
                 )
                 await session.commit()
                 last_error = f"[{provider.name}:{model_name}] {classified}"
+                logger.warning(
+                    "Embedding connection error",
+                    extra={
+                        "request_id": request_id,
+                        "provider": provider.name,
+                        "model": model_name,
+                        "error_type": classified.error_type.value,
+                        "error_detail": str(exc),
+                        "latency_ms": latency,
+                    },
+                )
 
     raise RuntimeError(
         f"All model set entries failed for '{set_name}'. Last error: {last_error}"

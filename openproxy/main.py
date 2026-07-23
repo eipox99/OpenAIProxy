@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -7,10 +10,12 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import delete, select, text
 
 from openproxy.database import async_session_factory, engine
-from openproxy.models import Base, Setting
+from openproxy.models import Base, Setting, Provider
 from openproxy.utils.auth import verify_auth
+from openproxy.utils.logging_config import setup_logging
 
 
 # We import routers so their routes get registered
@@ -20,16 +25,45 @@ from openproxy.api import models as models_api
 from openproxy.api import admin as admin_api
 from openproxy.web import routes as web_routes
 
+logger = logging.getLogger(__name__)
+
+_start_time: float = 0.0
+
+# ---- Watchdog task ----
+
+
+async def _watchdog_loop() -> None:
+    """Periodic health monitor that runs in the background.
+
+    Checks database connectivity and logs a health summary every 60 s.
+    Any unexpected error is caught and logged — this is the primary
+    diagnostic signal if the app becomes stuck.
+    """
+    while True:
+        try:
+            await asyncio.sleep(60)
+            async with async_session_factory() as session:
+                await session.execute(text("SELECT 1"))
+            uptime = int(time.monotonic() - _start_time)
+            logger.info("Watchdog ok", extra={"uptime_seconds": uptime})
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("Watchdog health check failed")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Create database tables and seed default settings on startup."""
+    global _start_time
+    setup_logging()
+    _start_time = time.monotonic()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     # Seed default settings
     async with async_session_factory() as session:
         from openproxy.utils.settings_helper import DEFAULTS
-        from sqlalchemy import select, delete
 
         for key, value in DEFAULTS.items():
             result = await session.execute(select(Setting).where(Setting.key == key))
@@ -40,8 +74,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             delete(Setting).where(Setting.key.notin_(list(DEFAULTS.keys())))
         )
         await session.commit()
+
+    # Start the background watchdog
+    watchdog_task = asyncio.create_task(_watchdog_loop(), name="watchdog")
+    logger.info("Application started")
+
     yield
+
+    # Clean shutdown
+    watchdog_task.cancel()
+    try:
+        await watchdog_task
+    except asyncio.CancelledError:
+        pass
     await engine.dispose()
+    logger.info("Application stopped")
 
 
 app = FastAPI(
@@ -87,6 +134,47 @@ async def auth_middleware(request: Request, call_next):
         return RedirectResponse(url="/login", status_code=303)
 
     return await call_next(request)
+
+
+# ---- Request logging middleware (outermost — captures every request) ----
+@app.middleware("http")
+async def request_log_middleware(request: Request, call_next):
+    start = time.monotonic()
+    try:
+        response = await call_next(request)
+        elapsed = int((time.monotonic() - start) * 1000)
+        if response.status_code < 400:
+            logger.info(
+                "Request",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": response.status_code,
+                    "latency_ms": elapsed,
+                },
+            )
+        else:
+            logger.warning(
+                "Request",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": response.status_code,
+                    "latency_ms": elapsed,
+                },
+            )
+        return response
+    except Exception:
+        elapsed = int((time.monotonic() - start) * 1000)
+        logger.exception(
+            "Request unhandled exception",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "latency_ms": elapsed,
+            },
+        )
+        raise
 
 
 # ---- Login / Logout (unauthenticated) ----
@@ -141,6 +229,13 @@ app.mount("/static", StaticFiles(directory="openproxy/web/static"), name="static
 # ---- Global error handler ----
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception(
+        "Unhandled exception processing request",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
     return JSONResponse(
         status_code=500,
         content={
@@ -155,4 +250,26 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 # ---- Health check ----
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    db_ok = False
+    provider_count = 0
+    try:
+        async with async_session_factory() as session:
+            await session.execute(text("SELECT 1"))
+            db_ok = True
+            # Count active providers
+            result = await session.execute(
+                select(Provider).where(Provider.is_active.is_(True))
+            )
+            providers = result.scalars().all()
+            provider_count = len(providers)
+    except Exception:
+        logger.exception("Health check database probe failed")
+
+    uptime = int(time.monotonic() - _start_time) if _start_time else 0
+
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "db": db_ok,
+        "active_providers": provider_count,
+        "uptime_seconds": uptime,
+    }

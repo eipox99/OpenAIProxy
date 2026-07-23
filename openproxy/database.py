@@ -14,10 +14,12 @@ engine = create_async_engine(
 
 
 @event.listens_for(engine.sync_engine, "connect")
-def _enable_sqlite_fks(dbapi_connection, connection_record):
-    """Enable foreign key enforcement in SQLite."""
+def _configure_sqlite(dbapi_connection, connection_record):
+    """Configure SQLite for safety and concurrency."""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys = ON")
+    cursor.execute("PRAGMA journal_mode = WAL")
+    cursor.execute("PRAGMA busy_timeout = 5000")
     cursor.close()
 
 
