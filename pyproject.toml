@@ -1,5 +1,5 @@
 [project]
-name = "openproxy"
+name = "openaiproxy"
 version = "0.1.0"
 description = "LLM router/proxy with priority-based failover and web UI"
 requires-python = ">=3.11"

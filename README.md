@@ -98,7 +98,7 @@ Settings are managed via environment variables (`.env` file):
 |----------|---------|-------------|
 | `HOST` | `0.0.0.0` | Server bind address |
 | `PORT` | `8000` | Server port |
-| `DATABASE_URL` | `sqlite+aiosqlite:///data/openproxy.db` | Database connection |
+| `DATABASE_URL` | `sqlite+aiosqlite:///data/openaiproxy.db` | Database connection |
 | `ENCRYPTION_KEY` | *(required)* | Fernet key for API key encryption |
 | `CIRCUIT_BREAKER_THRESHOLD` | `3` | Failures before circuit breaker activates |
 | `CIRCUIT_BREAKER_COOLDOWN` | `30` | Seconds to skip a failing provider |
@@ -111,7 +111,7 @@ Client App (OpenAI SDK)
       │
       ▼
 ┌─────────────────┐
-│   OpenProxy     │  ← Single base URL
+│   OpenAIProxy   │  ← Single base URL
 │  localhost:8000 │
 └────────┬────────┘
          │

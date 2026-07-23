@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # ---- Database ----
-    database_url: str = f"sqlite+aiosqlite:///{BASE_DIR}/data/openproxy.db"
+    database_url: str = f"sqlite+aiosqlite:///{BASE_DIR}/data/openaiproxy.db"
 
     # ---- Encryption ----
     # Used to encrypt API keys at rest. Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

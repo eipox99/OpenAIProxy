@@ -1,9 +1,9 @@
 version: "3.9"
 
 services:
-  openproxy:
+  openaiproxy:
     build: .
-    container_name: openproxy
+    container_name: openaiproxy
     ports:
       - "8000:8000"
     volumes:
