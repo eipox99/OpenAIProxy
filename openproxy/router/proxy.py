@@ -426,6 +426,14 @@ async def proxy_streaming_chat_completion(
                             classified = classify_response(resp)
                             await record_failure(session, provider)
                             error_type = classified.error_type.value if classified else "unknown"
+                            await _safe_stream_failover_log(
+                                session=session,
+                                request_id=request_id,
+                                provider_id=provider.id,
+                                model=model_name,
+                                error_type=error_type,
+                                latency_ms=latency,
+                            )
                             last_error = f"[{provider.name}:{model_name}] HTTP {resp.status_code}: {error_text[:200]}"
                             retryable = is_retryable(classified.error_type) if classified else True
                             logger.warning(
@@ -456,6 +464,14 @@ async def proxy_streaming_chat_completion(
                             # Non-SSE error body in 200 response
                             classified = ClassifiedError(ErrorType.SERVER_ERROR, decoded[:500], status_code=resp.status_code)
                             await record_failure(session, provider)
+                            await _safe_stream_failover_log(
+                                session=session,
+                                request_id=request_id,
+                                provider_id=provider.id,
+                                model=model_name,
+                                error_type=classified.error_type.value,
+                                latency_ms=latency,
+                            )
                             last_error = f"[{provider.name}:{model_name}] {classified}"
                             retryable = is_retryable(classified.error_type)
                             logger.warning(
@@ -522,6 +538,14 @@ async def proxy_streaming_chat_completion(
                     latency = int((time.monotonic() - start) * 1000)
                     classified = classify_exception(exc)
                     await record_failure(session, provider)
+                    await _safe_stream_failover_log(
+                        session=session,
+                        request_id=request_id,
+                        provider_id=provider.id,
+                        model=model_name,
+                        error_type=classified.error_type.value,
+                        latency_ms=latency,
+                    )
                     last_error = f"[{provider.name}:{model_name}] {classified}"
                     logger.warning(
                         "Streaming connection error",
