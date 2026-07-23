@@ -630,7 +630,11 @@ async def list_model_sets(session: AsyncSession = Depends(get_session)):
 
     stmt = (
         select(ModelSet)
-        .options(selectinload(ModelSet.entries).selectinload(ModelSetEntry.provider))
+        .options(
+            selectinload(ModelSet.entries)
+            .selectinload(ModelSetEntry.provider)
+            .selectinload(Provider.models)
+        )
         .order_by(ModelSet.name.asc())
     )
     result = await session.execute(stmt)
@@ -683,7 +687,11 @@ async def create_model_set(
     # Re-fetch with relationships
     stmt = (
         select(ModelSet)
-        .options(selectinload(ModelSet.entries).selectinload(ModelSetEntry.provider))
+        .options(
+            selectinload(ModelSet.entries)
+            .selectinload(ModelSetEntry.provider)
+            .selectinload(Provider.models)
+        )
         .where(ModelSet.id == model_set.id)
     )
     result = await session.execute(stmt)
@@ -711,7 +719,11 @@ async def update_model_set(
 ):
     stmt = (
         select(ModelSet)
-        .options(selectinload(ModelSet.entries).selectinload(ModelSetEntry.provider))
+        .options(
+            selectinload(ModelSet.entries)
+            .selectinload(ModelSetEntry.provider)
+            .selectinload(Provider.models)
+        )
         .where(ModelSet.id == set_id)
     )
     result = await session.execute(stmt)
@@ -938,7 +950,11 @@ async def sync_model_set(
     # Re-fetch the set with relationships and return it
     stmt = (
         select(ModelSet)
-        .options(selectinload(ModelSet.entries).selectinload(ModelSetEntry.provider))
+        .options(
+            selectinload(ModelSet.entries)
+            .selectinload(ModelSetEntry.provider)
+            .selectinload(Provider.models)
+        )
         .where(ModelSet.id == set_id)
     )
     result = await session.execute(stmt)
@@ -984,7 +1000,11 @@ async def reorder_model_set_by_size(
     # Re-fetch the set with relationships and return it
     stmt = (
         select(ModelSet)
-        .options(selectinload(ModelSet.entries).selectinload(ModelSetEntry.provider))
+        .options(
+            selectinload(ModelSet.entries)
+            .selectinload(ModelSetEntry.provider)
+            .selectinload(Provider.models)
+        )
         .where(ModelSet.id == set_id)
     )
     result = await session.execute(stmt)
