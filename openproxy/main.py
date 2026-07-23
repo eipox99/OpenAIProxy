@@ -136,26 +136,16 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-# ---- Request logging middleware (outermost — captures every request) ----
+# ---- Request error logging middleware (logs only 4xx/5xx and unhandled errors) ----
 @app.middleware("http")
 async def request_log_middleware(request: Request, call_next):
     start = time.monotonic()
     try:
         response = await call_next(request)
-        elapsed = int((time.monotonic() - start) * 1000)
-        if response.status_code < 400:
-            logger.info(
-                "Request",
-                extra={
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status": response.status_code,
-                    "latency_ms": elapsed,
-                },
-            )
-        else:
+        if response.status_code >= 400:
+            elapsed = int((time.monotonic() - start) * 1000)
             logger.warning(
-                "Request",
+                "Request error",
                 extra={
                     "method": request.method,
                     "path": request.url.path,
