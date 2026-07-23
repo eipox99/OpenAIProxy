@@ -132,8 +132,44 @@ async def proxy_chat_completion(
 
                     classified = classify_response(resp)
                     if classified is None:
-                        # Success
+                        # Success — but some providers return 200 with an error body
                         data = resp.json()
+                        if "error" in data:
+                            err_msg = str(data["error"])[:500]
+                            classified = ClassifiedError(ErrorType.SERVER_ERROR, err_msg, status_code=resp.status_code)
+                            await record_failure(session, provider)
+                            await _log_usage(
+                                session=session,
+                                request_id=request_id,
+                                provider_id=provider.id,
+                                model=model_name,
+                                status="failover",
+                                error_type=classified.error_type.value,
+                                stream_mode=False,
+                                latency_ms=latency,
+                            )
+                            await session.commit()
+                            last_error = f"[{provider.name}:{model_name}] {classified}"
+                            retryable = is_retryable(classified.error_type)
+                            logger.warning(
+                                "Chat failover (200-with-error)",
+                                extra={
+                                    "request_id": request_id,
+                                    "provider": provider.name,
+                                    "model": model_name,
+                                    "error_type": classified.error_type.value,
+                                    "error_detail": err_msg,
+                                    "retryable": retryable,
+                                    "latency_ms": latency,
+                                },
+                            )
+                            if not retryable:
+                                raise RuntimeError(
+                                    f"Non-retryable error from {provider.name}: {classified}"
+                                )
+                            continue
+
+                        # Genuine success
                         await record_success(session, provider)
                         usage = data.get("usage", {})
                         await _log_usage(
@@ -355,13 +391,50 @@ async def proxy_streaming_chat_completion(
                                 return
                             continue  # try next entry
 
-                        # Streaming success
+                        # Streaming success — but some providers return 200 with an error body
+                        # Fully read the response to check for embedded errors
+                        body = await resp.aread()
+                        decoded = body.decode(errors="replace")
+                        if '"error"' in decoded and not decoded.startswith("data: "):
+                            # Non-SSE error body in 200 response
+                            classified = ClassifiedError(ErrorType.SERVER_ERROR, decoded[:500], status_code=resp.status_code)
+                            await record_failure(session, provider)
+                            await _log_usage(
+                                session=session,
+                                request_id=request_id,
+                                provider_id=provider.id,
+                                model=model_name,
+                                status="failover",
+                                error_type=classified.error_type.value,
+                                stream_mode=True,
+                                latency_ms=latency,
+                            )
+                            await session.commit()
+                            last_error = f"[{provider.name}:{model_name}] {classified}"
+                            retryable = is_retryable(classified.error_type)
+                            logger.warning(
+                                "Streaming failover (200-with-error)",
+                                extra={
+                                    "request_id": request_id,
+                                    "provider": provider.name,
+                                    "model": model_name,
+                                    "error_type": classified.error_type.value,
+                                    "error_detail": decoded[:200],
+                                    "retryable": retryable,
+                                    "latency_ms": latency,
+                                },
+                            )
+                            if not retryable:
+                                yield json.dumps(
+                                    {"error": f"Non-retryable error from {provider.name}: {classified}"}
+                                ).encode()
+                                return
+                            continue
+
+                        # Genuine SSE stream — yield the entire body
                         await record_success(session, provider)
-                        token_count = 0
-                        async for chunk in resp.aiter_bytes():
-                            yield chunk
-                            if chunk.startswith(b"data: ") and chunk != b"data: [DONE]\n\n":
-                                token_count += 1
+                        token_count = body.count(b'data: ') - body.count(b'data: [DONE]')
+                        yield body
 
                         await _log_usage(
                             session=session,
