@@ -11,6 +11,9 @@ data/*.db
 # Environment
 .env
 
+# ZCode session artifacts
+.zcode/
+
 # IDE
 .vscode/
 .idea/
