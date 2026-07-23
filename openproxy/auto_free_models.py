@@ -9,7 +9,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from openproxy.database import async_session_factory
-from openproxy.models import ModelSet, ModelSetEntry, Provider
+from openproxy.models import ModelSet, ModelSetEntry, Provider, ProviderModel
+from openproxy.router.model_contexts import lookup_context_size
 from openproxy.utils.encryption import decrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -161,12 +162,52 @@ async def sync_auto_free_models() -> None:
                     continue
 
                 data = resp.json()
-                remote_models = [m["id"] for m in data.get("data", []) if m.get("id")]
+                remote_model_list = data.get("data", [])
+
+                # Collect (model_id, context_length) for each model
+                model_contexts: dict[str, int | None] = {}
+                for m in remote_model_list:
+                    mid = m.get("id")
+                    if not mid:
+                        continue
+                    # Some providers (e.g. OpenRouter) return context_length
+                    cl = m.get("context_length")
+                    if cl is not None:
+                        try:
+                            model_contexts[mid] = int(cl)
+                        except (ValueError, TypeError):
+                            model_contexts[mid] = None
+                    else:
+                        model_contexts[mid] = None
 
                 # Filter for models ending with "free"
-                for model_name in remote_models:
+                for model_name, cl in model_contexts.items():
                     if model_name.lower().endswith("free"):
                         expected_entries.add((provider.id, model_name))
+
+                        # Determine context size: API response > lookup table > None
+                        ctx = cl or lookup_context_size(model_name)
+
+                        # Update or create ProviderModel record with context_size
+                        existing_model = await session.execute(
+                            select(ProviderModel).where(
+                                ProviderModel.provider_id == provider.id,
+                                ProviderModel.name == model_name,
+                            )
+                        )
+                        pm = existing_model.scalar_one_or_none()
+                        if pm is None:
+                            pm = ProviderModel(
+                                provider_id=provider.id,
+                                name=model_name,
+                                context_size=ctx,
+                                is_enabled=True,
+                                is_auto_detected=True,
+                            )
+                            session.add(pm)
+                        else:
+                            if pm.context_size is None and ctx is not None:
+                                pm.context_size = ctx
 
                 scanned_provider_ids.add(provider.id)
 

@@ -16,18 +16,24 @@ logger = logging.getLogger(__name__)
 
 async def get_model_set_entries(
     session: AsyncSession, set_name: str
-) -> list[tuple[Provider, str, dict]]:
-    """Return ordered list of (provider, model_name_to_forward, overrides_dict).
+) -> tuple[list[tuple[Provider, str, dict]], int | None]:
+    """Return (ordered_entries, effective_context) for a model set.
+
+    ``ordered_entries`` is a list of ``(provider, model_name_to_forward, overrides_dict)``
+    tuples.  ``effective_context`` is the minimum context_size across all
+    enabled entries (or ``None`` if no entry has a known context size).
 
     Only matches the exact set name. No fallback - each set is isolated.
-    Returns empty list if the set doesn't exist.
+    Returns ``([], None)`` if the set doesn't exist.
     """
     now = datetime.datetime.now()
 
     stmt = (
         select(ModelSet)
         .options(
-            selectinload(ModelSet.entries).selectinload(ModelSetEntry.provider)
+            selectinload(ModelSet.entries)
+            .selectinload(ModelSetEntry.provider)
+            .selectinload(Provider.models)
         )
         .where(ModelSet.name == set_name)
     )
@@ -35,12 +41,13 @@ async def get_model_set_entries(
     model_set = result.scalar_one_or_none()
 
     if model_set is None:
-        return []
+        return [], None
 
     import json
 
     # Filter and sort
     entries: list[tuple[Provider, str, dict]] = []
+    effective_context: int | None = None
     for entry in model_set.entries:
         if not entry.is_enabled:
             logger.info(
@@ -85,8 +92,28 @@ async def get_model_set_entries(
             entry.priority,
         )
 
+        # Track the minimum context size for effective_context
+        if provider and provider.models:
+            for pm in provider.models:
+                if pm.name == entry.model_name and pm.context_size is not None:
+                    if effective_context is None or pm.context_size < effective_context:
+                        effective_context = pm.context_size
+                    break
+
     # Entries are already ordered by priority via the relationship
-    return entries
+    return entries, effective_context
+
+
+def get_context_size_for_entry(
+    provider: Provider, model_name: str
+) -> int | None:
+    """Look up the context_size for *model_name* on *provider*'s model list."""
+    if not provider or not provider.models:
+        return None
+    for pm in provider.models:
+        if pm.name == model_name:
+            return pm.context_size
+    return None
 
 
 async def record_failure(session: AsyncSession, provider: Provider) -> None:

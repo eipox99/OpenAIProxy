@@ -535,3 +535,10 @@ function statsData() {
         },
     };
 }
+
+function formatContextSize(ctx) {
+    if (ctx == null) return '—';
+    if (ctx >= 1000000) return (ctx / 1000000).toFixed(1) + 'M';
+    if (ctx >= 1000) return (ctx / 1000).toFixed(0) + 'K';
+    return String(ctx);
+}

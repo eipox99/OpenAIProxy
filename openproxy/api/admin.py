@@ -27,6 +27,7 @@ from openproxy.schemas import (
     ProviderUpdate,
     StatsResponse,
 )
+from openproxy.router.model_contexts import lookup_context_size
 from openproxy.utils.encryption import decrypt_api_key, encrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,11 @@ def _entry_to_dict(
     e: ModelSetEntry, now: datetime.datetime
 ) -> dict:
     """Serialize a ModelSetEntry to a dict, including its computed status."""
+    context_size = None
+    if e.provider:
+        model_match = [m for m in e.provider.models if m.name == e.model_name]
+        if model_match:
+            context_size = model_match[0].context_size
     return {
         "id": e.id,
         "model_set_id": e.model_set_id,
@@ -82,6 +88,7 @@ def _entry_to_dict(
         "priority": e.priority,
         "overrides": json.loads(e.overrides) if e.overrides else {},
         "is_enabled": e.is_enabled,
+        "context_size": context_size,
         "status": _compute_entry_status(e, now),
     }
 
@@ -307,7 +314,8 @@ async def detect_models(
                 detail=f"Provider returned HTTP {resp.status_code}",
             )
         data = resp.json()
-        remote_models = [m["id"] for m in data.get("data", []) if m.get("id")]
+        remote_model_list = data.get("data", [])
+        remote_models = [m["id"] for m in remote_model_list if m.get("id")]
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -318,18 +326,43 @@ async def detect_models(
     existing_names = set(existing_result.scalars().all())
 
     added = 0
-    for name in remote_models:
+    for entry in remote_model_list:
+        name = entry.get("id")
+        if not name:
+            continue
+
+        # Try to extract context_length from provider API response
+        ctx = None
+        cl = entry.get("context_length")
+        if cl is not None:
+            try:
+                ctx = int(cl)
+            except (ValueError, TypeError):
+                pass
+        if ctx is None:
+            ctx = lookup_context_size(name)
+
         if name not in existing_names:
             session.add(
                 ProviderModel(
                     provider_id=provider_id,
                     name=name,
+                    context_size=ctx,
                     is_enabled=True,
                     is_auto_detected=True,
                 )
             )
             added += 1
         else:
+            # Update context_size if provider now returns it
+            await session.execute(
+                update(ProviderModel)
+                .where(
+                    ProviderModel.provider_id == provider_id,
+                    ProviderModel.name == name,
+                )
+                .values(context_size=ctx)
+            )
             # Ensure auto_detected flag is set for previously detected models
             await session.execute(
                 update(ProviderModel)
@@ -370,6 +403,7 @@ async def list_provider_models(
         {
             "id": m.id,
             "name": m.name,
+            "context_size": m.context_size,
             "is_enabled": m.is_enabled,
             "is_auto_detected": m.is_auto_detected,
             "created_at": m.created_at.isoformat() if m.created_at else None,
@@ -880,6 +914,34 @@ async def toggle_model_set_entry(
     return {
         "id": entry.id,
         "is_enabled": entry.is_enabled,
+    }
+
+
+@router.put("/providers/{provider_id}/models/{model_id}/context-size")
+async def set_model_context_size(
+    provider_id: int,
+    model_id: int,
+    body: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    """Manually set the context_size for a provider model."""
+    model = await session.get(ProviderModel, model_id)
+    if not model or model.provider_id != provider_id:
+        raise HTTPException(status_code=404, detail="Model not found")
+    ctx = body.get("context_size")
+    if ctx is not None:
+        try:
+            ctx = int(ctx)
+            if ctx <= 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="context_size must be a positive integer")
+    model.context_size = ctx
+    await session.commit()
+    return {
+        "id": model.id,
+        "name": model.name,
+        "context_size": model.context_size,
     }
 
 

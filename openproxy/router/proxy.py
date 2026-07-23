@@ -21,6 +21,7 @@ from openproxy.router.error_classifier import (
     is_retryable,
 )
 from openproxy.router.provider_manager import (
+    get_context_size_for_entry,
     get_model_set_entries,
     record_failure,
     record_success,
@@ -137,7 +138,7 @@ async def proxy_chat_completion(
     errors, retries the entire set from the beginning (up to set_retry_limit).
     """
     request_id = str(uuid.uuid4())
-    entries = await get_model_set_entries(session, set_name)
+    entries, effective_context = await get_model_set_entries(session, set_name)
     logger.info(
         "Chat request start",
         extra={
@@ -166,6 +167,38 @@ async def proxy_chat_completion(
             "Check that the set has enabled entries with active providers."
         )
 
+    # ── Proactive context enforcement ──────────────────────────
+    if effective_context is not None:
+        # Rough token estimate: ~4 chars per token for English text
+        messages_text = json.dumps(body.get("messages", ""))
+        estimated_prompt_tokens = len(messages_text) // 4
+        if estimated_prompt_tokens < 1:
+            estimated_prompt_tokens = 1
+
+        max_tokens = body.get("max_tokens")
+        if max_tokens is not None:
+            total_needed = estimated_prompt_tokens + max_tokens
+            safety_margin = 256
+            if total_needed > effective_context:
+                new_max = max(1, effective_context - estimated_prompt_tokens - safety_margin)
+                logger.warning(
+                    "Capping max_tokens for set '%s': requested %d, estimated_prompt=%d, "
+                    "effective_context=%d → capped to %d",
+                    set_name, max_tokens, estimated_prompt_tokens, effective_context, new_max,
+                )
+                body["max_tokens"] = new_max
+        else:
+            # No max_tokens set — set a sensible default from effective context
+            default_max = effective_context - estimated_prompt_tokens - 256
+            if default_max > 0:
+                body["max_tokens"] = min(default_max, 4096)
+            else:
+                logger.warning(
+                    "Prompt for set '%s' already exceeds effective context %d (estimated %d tokens)",
+                    set_name, effective_context, estimated_prompt_tokens,
+                )
+    # ────────────────────────────────────────────────────────────
+
     from openproxy.utils.settings_helper import get_int_setting
     retry_limit = await get_int_setting(session, "set_retry_limit", 2)
 
@@ -182,6 +215,10 @@ async def proxy_chat_completion(
                         "max_attempts": retry_limit + 1,
                     },
                 )
+            # Track the smallest context size that triggered a context-length
+            # failover.  Any subsequent entry whose context_size is at or
+            # below this threshold is skipped — it would only repeat the error.
+            _context_skip_threshold: int | None = None
             all_retryable = True
             for provider, model_name, overrides in entries:
                 api_key = decrypt_api_key(provider.api_key)
@@ -190,6 +227,18 @@ async def proxy_chat_completion(
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 }
+
+                # ── Context-aware skip ──────────────────────────────
+                if _context_skip_threshold is not None:
+                    ctx = get_context_size_for_entry(provider, model_name)
+                    if ctx is not None and ctx <= _context_skip_threshold:
+                        logger.info(
+                            "Skipping entry %s/%s during failover: context %d <= threshold %d",
+                            provider.name, model_name, ctx, _context_skip_threshold,
+                        )
+                        continue
+                # ──────────────────────────────────────────────────────
+
                 forwarded_body = _rewrite_body(body, model_name, overrides)
 
                 start = time.monotonic()
@@ -239,6 +288,8 @@ async def proxy_chat_completion(
                         choices = data.get("choices", [])
                         finish_reason = choices[0].get("finish_reason") if choices else None
                         if finish_reason == "length":
+                            # Get the failed entry's context size
+                            failed_ctx = get_context_size_for_entry(provider, model_name)
                             classified = ClassifiedError(
                                 ErrorType.RATE_LIMIT,
                                 f"Context length exceeded on {provider.name}:{model_name}",
@@ -262,8 +313,18 @@ async def proxy_chat_completion(
                                     "model": model_name,
                                     "error_type": "context_length",
                                     "latency_ms": latency,
+                                    "context_size": failed_ctx,
                                 },
                             )
+                            # Raise the skip threshold so subsequent entries
+                            # with context_size <= failed_ctx are skipped.
+                            if failed_ctx is not None:
+                                if _context_skip_threshold is None or failed_ctx > _context_skip_threshold:
+                                    _context_skip_threshold = failed_ctx
+                                    logger.info(
+                                        "Set context skip threshold to %d after truncation on %s/%s",
+                                        _context_skip_threshold, provider.name, model_name,
+                                    )
                             continue
 
                         # Genuine success
@@ -393,7 +454,7 @@ async def proxy_streaming_chat_completion(
     Yields raw SSE bytes suitable for a StreamingResponse.
     """
     request_id = str(uuid.uuid4())
-    entries = await get_model_set_entries(session, set_name)
+    entries, effective_context = await get_model_set_entries(session, set_name)
     logger.info(
         "Streaming request start",
         extra={
@@ -420,6 +481,36 @@ async def proxy_streaming_chat_completion(
         yield json.dumps({"error": f"No entries found for model set '{set_name}'"}).encode()
         return
 
+    # ── Proactive context enforcement ──────────────────────────
+    if effective_context is not None:
+        messages_text = json.dumps(body.get("messages", ""))
+        estimated_prompt_tokens = len(messages_text) // 4
+        if estimated_prompt_tokens < 1:
+            estimated_prompt_tokens = 1
+
+        max_tokens = body.get("max_tokens")
+        if max_tokens is not None:
+            total_needed = estimated_prompt_tokens + max_tokens
+            safety_margin = 256
+            if total_needed > effective_context:
+                new_max = max(1, effective_context - estimated_prompt_tokens - safety_margin)
+                logger.warning(
+                    "Capping max_tokens for set '%s' (streaming): requested %d, "
+                    "estimated_prompt=%d, effective_context=%d → capped to %d",
+                    set_name, max_tokens, estimated_prompt_tokens, effective_context, new_max,
+                )
+                body["max_tokens"] = new_max
+        else:
+            default_max = effective_context - estimated_prompt_tokens - 256
+            if default_max > 0:
+                body["max_tokens"] = min(default_max, 4096)
+            else:
+                logger.warning(
+                    "Prompt for set '%s' already exceeds effective context %d (estimated %d tokens)",
+                    set_name, effective_context, estimated_prompt_tokens,
+                )
+    # ────────────────────────────────────────────────────────────
+
     from openproxy.utils.settings_helper import get_int_setting
     retry_limit = await get_int_setting(session, "set_retry_limit", 2)
 
@@ -436,6 +527,7 @@ async def proxy_streaming_chat_completion(
                         "max_attempts": retry_limit + 1,
                     },
                 )
+            _context_skip_threshold: int | None = None
             for provider, model_name, overrides in entries:
                 api_key = decrypt_api_key(provider.api_key)
                 url = f"{provider.base_url.rstrip('/')}/v1/chat/completions"
@@ -443,6 +535,18 @@ async def proxy_streaming_chat_completion(
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 }
+
+                # ── Context-aware skip ──────────────────────────────
+                if _context_skip_threshold is not None:
+                    ctx = get_context_size_for_entry(provider, model_name)
+                    if ctx is not None and ctx <= _context_skip_threshold:
+                        logger.info(
+                            "Skipping entry %s/%s during streaming failover: context %d <= threshold %d",
+                            provider.name, model_name, ctx, _context_skip_threshold,
+                        )
+                        continue
+                # ──────────────────────────────────────────────────────
+
                 forwarded_body = _rewrite_body(body, model_name, overrides)
 
                 start = time.monotonic()
@@ -526,6 +630,7 @@ async def proxy_streaming_chat_completion(
 
                         # Detect context-length truncation in SSE stream
                         if b'"finish_reason":"length"' in body or b"'finish_reason': 'length'" in body:
+                            failed_ctx = get_context_size_for_entry(provider, model_name)
                             classified = ClassifiedError(
                                 ErrorType.RATE_LIMIT,
                                 f"Context length exceeded on {provider.name}:{model_name}",
@@ -549,8 +654,19 @@ async def proxy_streaming_chat_completion(
                                     "model": model_name,
                                     "error_type": "context_length",
                                     "latency_ms": latency,
+                                    "context_size": failed_ctx,
                                 },
                             )
+
+                            # Raise the skip threshold so subsequent entries
+                            # with context_size <= failed_ctx are skipped.
+                            if failed_ctx is not None:
+                                if _context_skip_threshold is None or failed_ctx > _context_skip_threshold:
+                                    _context_skip_threshold = failed_ctx
+                                    logger.info(
+                                        "Set context skip threshold to %d after streaming truncation on %s/%s",
+                                        _context_skip_threshold, provider.name, model_name,
+                                    )
                             continue
 
                         # Genuine SSE stream — yield the entire body
@@ -645,7 +761,7 @@ async def proxy_embedding(
 ) -> dict[str, Any]:
     """Proxy an embedding request through a model set."""
     request_id = str(uuid.uuid4())
-    entries = await get_model_set_entries(session, set_name)
+    entries, _ = await get_model_set_entries(session, set_name)
     logger.info(
         "Embedding request start",
         extra={

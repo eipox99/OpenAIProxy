@@ -70,6 +70,7 @@
                                 <template x-if="selectedSet.last_synced">
                                     <span style="font-size:0.75rem;color:#888;" x-text="'Last synced: ' + formatTimeAgo(selectedSet.last_synced)"></span>
                                 </template>
+                                <span style="font-size:0.75rem;color:#666;" x-text="'Effective context: ' + (() => { const ctxs = selectedSet.entries.filter(e => e.is_enabled).map(e => e.context_size).filter(c => c != null); return ctxs.length > 0 ? formatContextSize(Math.min(...ctxs)) : 'unknown'; })()"></span>
                                 <template x-if="!selectedSet.is_system">
                                     <button class="small secondary" @click="deleteSet(selectedSet.id, selectedSet.name)"
                                             style="margin-left:auto;font-size:0.75rem;">🗑️ Delete Set</button>
@@ -82,6 +83,7 @@
                                     <tr>
                                         <th>#</th>
                                         <th>Model</th>
+                                        <th>Context</th>
                                         <th>Provider</th>
                                         <th>Status</th>
                                         <th>Enabled</th>
@@ -100,6 +102,7 @@
                                                 <span style="margin-left:0.3rem;font-size:0.85rem;" x-text="e.priority"></span>
                                             </td>
                                             <td><code x-text="e.model_name" style="font-size:0.85rem;"></code></td>
+                                            <td style="font-size:0.8rem;color:#888;text-align:center;" x-text="formatContextSize(e.context_size)"></td>
                                             <td x-text="e.provider_name" style="font-size:0.85rem;"></td>
                                             <td>
                                                 <template x-if="e.status">
