@@ -221,14 +221,14 @@ async def sync_auto_free_models() -> None:
                 reordered = True
 
         if added or removed or reordered:
-            model_set.last_synced = datetime.datetime.now()
-            await session.commit()
             logger.info(
-                "AutoFreeModels sync: %d added, %d removed, "
-                "%s by parameter size",
+                "AutoFreeModels sync: %d added, %d removed, %s",
                 added,
                 removed,
                 "reordered" if reordered else "no reorder needed",
             )
         else:
             logger.info("AutoFreeModels sync: no changes")
+
+        model_set.last_synced = datetime.datetime.now()
+        await session.commit()
