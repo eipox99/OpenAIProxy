@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from enum import Enum
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class ErrorType(str, Enum):
@@ -37,6 +40,26 @@ def classify_http_status(status_code: int) -> ErrorType:
     return ErrorType.UNKNOWN
 
 
+_RETRYABLE_KEYWORDS = (
+    "resourc",
+    "rate_limit",
+    "rate limit",
+    "too many",
+    "exhausted",
+    "capacity",
+    "overloaded",
+    "busy",
+    "try again",
+    "limit reached",
+)
+
+
+def _body_has_retryable_hint(body: str) -> bool:
+    """Check if the response body suggests a transient/retryable failure."""
+    body_lower = body.lower()
+    return any(kw in body_lower for kw in _RETRYABLE_KEYWORDS)
+
+
 def is_retryable(error_type: ErrorType) -> bool:
     """Return True if the error type should trigger a failover to the next provider."""
     return error_type in (
@@ -61,17 +84,37 @@ def classify_response(response: httpx.Response) -> ClassifiedError | None:
     """Classify a non-2xx httpx Response. Returns None if the status is 2xx."""
     if response.is_success:
         return None
-    error_type = classify_http_status(response.status_code)
 
-    # Upgrade BAD_REQUEST to SERVER_ERROR if the body contains rate-limit
-    # or resource-exhaustion keywords — some providers (e.g. Nvidia NIM)
-    # return 400 instead of 429 for "ResourceExhausted".
-    if error_type == ErrorType.BAD_REQUEST:
-        body_lower = response.text[:1000].lower()
-        if any(
-            kw in body_lower
-            for kw in ("resourc", "rate_limit", "rate limit", "too many", "exhausted", "capacity")
-        ):
-            error_type = ErrorType.RATE_LIMIT
+    status_code = response.status_code
+    error_type = classify_http_status(status_code)
 
-    return ClassifiedError(error_type, response.text[:500], status_code=response.status_code)
+    # Try to read response body for content-based hints
+    body_text = ""
+    try:
+        body_text = response.text[:2000]
+    except Exception:
+        pass
+
+    # Upgrade BAD_REQUEST to RATE_LIMIT if body hints at a transient failure.
+    # Some providers (e.g. Nvidia NIM) return 400 instead of 429 for
+    # "ResourceExhausted" errors.
+    if error_type == ErrorType.BAD_REQUEST and _body_has_retryable_hint(body_text):
+        logger.info(
+            "Upgrading BAD_REQUEST to RATE_LIMIT for status %d (body hints at transient failure)",
+            status_code,
+        )
+        error_type = ErrorType.RATE_LIMIT
+
+    # Also upgrade UNKNOWN for common transient status codes with retryable hints
+    if error_type == ErrorType.UNKNOWN and _body_has_retryable_hint(body_text):
+        logger.info(
+            "Upgrading UNKNOWN to RATE_LIMIT for status %d (body hints at transient failure)",
+            status_code,
+        )
+        error_type = ErrorType.RATE_LIMIT
+
+    return ClassifiedError(
+        error_type,
+        body_text[:500] if body_text else response.reason_phrase or f"HTTP {status_code}",
+        status_code=status_code,
+    )
