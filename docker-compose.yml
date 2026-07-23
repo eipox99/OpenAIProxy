@@ -6,5 +6,9 @@ services:
       - "8000:8000"
     volumes:
       - /mnt/user/appdata/OpenAIProxy/data:/app/data
-      - /mnt/user/appdata/OpenAIProxy/.env:/app/.env:ro
+    environment:
+      - ENCRYPTION_KEY=changeme
+      - AUTH_TOKEN=changeme
+      - HOST=0.0.0.0
+      - PORT=8000
     restart: unless-stopped
