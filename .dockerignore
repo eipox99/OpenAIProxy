@@ -1,0 +1,11 @@
+.venv/
+.venv
+.env
+.zcode/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.git/
+.gitignore
+README.md
+run.sh
