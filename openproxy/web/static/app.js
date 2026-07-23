@@ -124,6 +124,12 @@ function modelSetsData() {
         },
         get selectedSet() { return this.sets.find(s => s.id === this.selectedSetId) || null; },
         selectSet(id) { this.selectedSetId = id; },
+        setContextSize() {
+            const s = this.selectedSet;
+            if (!s || !s.entries) return null;
+            const ctxs = s.entries.filter(e => e.is_enabled).map(e => e.context_size).filter(c => c != null);
+            return ctxs.length > 0 ? Math.min(...ctxs) : null;
+        },
 
         startRename() { this.renameValue = this.selectedSet?.name || ''; this.editingName = true; },
         async submitRename() {
