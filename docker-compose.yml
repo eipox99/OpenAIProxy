@@ -1,6 +1,6 @@
 services:
   openaiproxy:
-    build: .
+    image: ghcr.io/eipox99/openaiproxy:latest
     container_name: openaiproxy
     ports:
       - "8000:8000"
