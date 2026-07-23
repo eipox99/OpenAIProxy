@@ -5,8 +5,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
-      - ./.env:/app/.env:ro
+      - /mnt/user/appdata/OpenAIProxy/data:/app/data
+      - /mnt/user/appdata/OpenAIProxy/.env:/app/.env:ro
     environment:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - AUTH_TOKEN=${AUTH_TOKEN}

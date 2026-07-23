@@ -19,7 +19,8 @@ A lightweight, self-hosted **LLM router/proxy** that exposes an **OpenAI-compati
 
 ```bash
 # Clone and install
-cd openproxy
+git clone https://github.com/eipox99/OpenAIProxy.git
+cd OpenAIProxy
 pip install -e .
 
 # Generate an encryption key
@@ -36,12 +37,18 @@ uvicorn openproxy.main:app --host 0.0.0.0 --port 8000
 ### Using Docker
 
 ```bash
-# Generate an encryption key
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Clone to your appdata directory (Unraid) or anywhere persistent
+mkdir -p /mnt/user/appdata/OpenAIProxy
+cd /mnt/user/appdata/OpenAIProxy
+git clone https://github.com/eipox99/OpenAIProxy.git .
+
+# Generate secrets
+openssl rand -base64 32   # → paste as ENCRYPTION_KEY in .env
+openssl rand -base64 32   # → paste as AUTH_TOKEN in .env
 
 # Set up .env
 cp .env.example .env
-# Edit .env and paste your encryption key
+# Edit .env and paste your keys
 
 # Start
 docker compose up -d
