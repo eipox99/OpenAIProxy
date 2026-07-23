@@ -62,4 +62,16 @@ def classify_response(response: httpx.Response) -> ClassifiedError | None:
     if response.is_success:
         return None
     error_type = classify_http_status(response.status_code)
+
+    # Upgrade BAD_REQUEST to SERVER_ERROR if the body contains rate-limit
+    # or resource-exhaustion keywords — some providers (e.g. Nvidia NIM)
+    # return 400 instead of 429 for "ResourceExhausted".
+    if error_type == ErrorType.BAD_REQUEST:
+        body_lower = response.text[:1000].lower()
+        if any(
+            kw in body_lower
+            for kw in ("resourc", "rate_limit", "rate limit", "too many", "exhausted", "capacity")
+        ):
+            error_type = ErrorType.RATE_LIMIT
+
     return ClassifiedError(error_type, response.text[:500], status_code=response.status_code)
