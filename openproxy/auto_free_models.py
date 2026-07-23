@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import datetime
 import logging
+import re
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from openproxy.database import async_session_factory
@@ -17,6 +18,30 @@ MODEL_SET_NAME = "AutoFreeModels"
 
 # How often the sync runs (set by the background task interval, used for logging)
 SYNC_INTERVAL_SECONDS = 1800
+
+# Regex to extract parameter size from model names (e.g. "70b", "8B", "1.5b")
+_PARAM_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[bB](?:\b|$)")
+
+
+def _extract_param_size(model_name: str) -> float:
+    """Extract parameter count in billions from a model name.
+
+    Looks for a number (integer or decimal) followed by ``b`` or ``B``
+    at a word boundary.  Returns 0.0 if no match is found, so those
+    models sort to the bottom.
+
+    Examples::
+
+        "claude-3-haiku-8b"      -> 8.0
+        "llama-3-70b-instruct"   -> 70.0
+        "phi-3.5-1.5b-free"      -> 1.5
+        "mixtral-8x7b"           -> 7.0
+        "gpt-4o-mini-free"       -> 0.0  (no explicit size)
+    """
+    match = _PARAM_SIZE_RE.search(model_name)
+    if match:
+        return float(match.group(1))
+    return 0.0
 
 
 async def sync_auto_free_models() -> None:
@@ -157,14 +182,39 @@ async def sync_auto_free_models() -> None:
                 await session.delete(entry)
                 removed += 1
 
-        if added or removed:
+        # --- Reorder all remaining entries by parameter size ---
+        # Larger parameter size = higher priority (lower priority number).
+        final_result = await session.execute(
+            select(ModelSetEntry).where(
+                ModelSetEntry.model_set_id == model_set.id
+            )
+        )
+        final_entries = list(final_result.scalars().all())
+        reordered = False
+        if len(final_entries) > 1:
+            sorted_entries = sorted(
+                final_entries,
+                key=lambda e: _extract_param_size(e.model_name),
+                reverse=True,
+            )
+            for idx, entry in enumerate(sorted_entries, start=1):
+                if entry.priority != idx:
+                    await session.execute(
+                        update(ModelSetEntry)
+                        .where(ModelSetEntry.id == entry.id)
+                        .values(priority=idx)
+                    )
+                    reordered = True
+
+        if added or removed or reordered:
             model_set.last_synced = datetime.datetime.now()
             await session.commit()
             logger.info(
-                "AutoFreeModels sync: %d added, %d removed, %d total",
+                "AutoFreeModels sync: %d added, %d removed, "
+                "%s by parameter size",
                 added,
                 removed,
-                len(expected_entries),
+                "reordered" if reordered else "no reorder needed",
             )
         else:
             logger.info("AutoFreeModels sync: no changes")
