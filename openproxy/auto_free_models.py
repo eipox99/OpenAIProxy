@@ -170,8 +170,12 @@ async def sync_auto_free_models() -> None:
                     mid = m.get("id")
                     if not mid:
                         continue
-                    # Some providers (e.g. OpenRouter) return context_length
+                    # Try OpenRouter-style (context_length) and OpenCode Zen-style (limit.context)
                     cl = m.get("context_length")
+                    if cl is None:
+                        limit = m.get("limit")
+                        if limit and isinstance(limit, dict):
+                            cl = limit.get("context")
                     if cl is not None:
                         try:
                             model_contexts[mid] = int(cl)

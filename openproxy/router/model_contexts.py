@@ -1,18 +1,21 @@
 """Static lookup table of known model context sizes.
 
 Used as a fallback when provider APIs do not expose context_length
-in their ``/v1/models`` response.  Models not listed here (and not
-returned by the provider) get ``context_size = None`` and are treated
-as having unknown context — the proxy will not cap ``max_tokens``
-for them and will not skip them during failover.
+(or ``limit.context``) in their ``/v1/models`` response.  Models not
+listed here (and not returned by the provider) get ``context_size = None``
+and are treated as having unknown context — the proxy will not cap
+``max_tokens`` for them and will not skip them during failover.
 
 Sources
 -------
 * OpenRouter model list (https://openrouter.ai/models)
+* OpenCode Zen model list (https://open-code.ai/en/docs/zen)
 * OpenAI model docs
 * Anthropic model docs
 * Provider model cards for Llama, Mistral, Gemma, Qwen, DeepSeek, etc.
 """
+
+import re
 
 # Maps a lower-cased model identifier to its context window in tokens.
 # Suffix-only entries (e.g. "llama-3.1-70b") match any model whose
@@ -89,6 +92,9 @@ _CONTEXT_SIZES: dict[str, int] = {
     "qwen-1.5-7b": 32768,
     # ── DeepSeek ─────────────────────────────────────────────────────
     "deepseek-chat": 65536,
+    "deepseek-v4": 1048576,
+    "deepseek-v4-flash": 1048576,
+    "deepseek-v4-pro": 1048576,
     "deepseek-v3": 65536,
     "deepseek-coder": 65536,
     "deepseek-r1": 65536,
@@ -105,6 +111,7 @@ _CONTEXT_SIZES: dict[str, int] = {
     "phi-2": 2048,
     # ── Nvidia ───────────────────────────────────────────────────────
     "nemotron-3-ultra-550b-a55b": 4096,
+    "nemotron-3-ultra": 4096,
     "nemotron-4-340b": 4096,
     "llama-3.1-nemotron-70b": 131072,
     # ── Cohere / Command ─────────────────────────────────────────────
@@ -127,6 +134,10 @@ _CONTEXT_SIZES: dict[str, int] = {
     "reka-core": 131072,
     "reka-flash": 131072,
     "reka-edge": 131072,
+    # ── OpenCode Zen (coding-agent-focused models) ──────────────────
+    "mimo-v2.5": 128000,
+    "north-mini-code": 128000,
+    "laguna-s-2.1": 8000,
 }
 
 
@@ -175,6 +186,17 @@ def lookup_context_size(model_name: str) -> int | None:
             best_len = len(known)
     if best_size is not None:
         return best_size
+
+    # Strategy 5: parse context size from model name patterns.
+    # Many models embed their context in the name (e.g. "128k", "1m", "32k").
+    ctx_match = re.search(r'(\d+)\s*(k|m)\b', key, re.IGNORECASE)
+    if ctx_match:
+        num = int(ctx_match.group(1))
+        unit = ctx_match.group(2).lower()
+        if unit == 'm':
+            return num * 1000000
+        else:
+            return num * 1000
 
     return None
 

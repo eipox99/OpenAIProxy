@@ -334,6 +334,10 @@ async def detect_models(
         # Try to extract context_length from provider API response
         ctx = None
         cl = entry.get("context_length")
+        if cl is None:
+            limit = entry.get("limit")
+            if limit and isinstance(limit, dict):
+                cl = limit.get("context")
         if cl is not None:
             try:
                 ctx = int(cl)
