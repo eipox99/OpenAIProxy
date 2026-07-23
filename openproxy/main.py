@@ -107,6 +107,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 logger.info("Migration: added last_synced column to model_sets")
 
         await conn.run_sync(_migrate_model_sets)
+
+        def _migrate_provider_models(sync_conn):
+            inspector = sa_inspect(sync_conn)
+            cols = {c["name"] for c in inspector.get_columns("provider_models")}
+            if "context_size" not in cols:
+                sync_conn.execute(
+                    text("ALTER TABLE provider_models ADD COLUMN context_size INTEGER")
+                )
+                logger.info("Migration: added context_size column to provider_models")
+
+        await conn.run_sync(_migrate_provider_models)
     # Seed default settings
     async with async_session_factory() as session:
         from openproxy.utils.settings_helper import DEFAULTS
