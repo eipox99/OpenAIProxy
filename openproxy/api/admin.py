@@ -943,3 +943,56 @@ async def sync_model_set(
         "created_at": model_set.created_at.isoformat() if model_set.created_at else None,
         "last_synced": model_set.last_synced.isoformat() if model_set.last_synced else None,
     }
+
+
+@router.post("/model-sets/{set_id}/reorder-by-size")
+async def reorder_model_set_by_size(
+    set_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """Reorder entries in a model set by parameter size (larger = higher priority)."""
+    model_set = await session.get(ModelSet, set_id)
+    if not model_set:
+        raise HTTPException(status_code=404, detail="Model set not found")
+
+    from openproxy.auto_free_models import reorder_by_param_size
+
+    try:
+        changed = await reorder_by_param_size(session, set_id)
+    except Exception as exc:
+        logger.exception("Reorder by size failed")
+        raise HTTPException(status_code=500, detail=f"Reorder failed: {exc}")
+
+    await session.commit()
+    logger.info("Reorder by size: %d entries changed in set '%s'", changed, model_set.name)
+
+    # Re-fetch the set with relationships and return it
+    stmt = (
+        select(ModelSet)
+        .options(selectinload(ModelSet.entries).selectinload(ModelSetEntry.provider))
+        .where(ModelSet.id == set_id)
+    )
+    result = await session.execute(stmt)
+    model_set = result.scalar_one()
+
+    entries_list = []
+    for e in model_set.entries:
+        entries_list.append({
+            "id": e.id,
+            "model_set_id": e.model_set_id,
+            "provider_id": e.provider_id,
+            "provider_name": e.provider.name if e.provider else "deleted",
+            "model_name": e.model_name,
+            "priority": e.priority,
+            "is_enabled": e.is_enabled,
+        })
+
+    return {
+        "id": model_set.id,
+        "name": model_set.name,
+        "is_default": model_set.is_default,
+        "is_system": model_set.is_system,
+        "entries": entries_list,
+        "created_at": model_set.created_at.isoformat() if model_set.created_at else None,
+        "last_synced": model_set.last_synced.isoformat() if model_set.last_synced else None,
+    }

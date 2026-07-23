@@ -44,6 +44,54 @@ def _extract_param_size(model_name: str) -> float:
     return 0.0
 
 
+async def reorder_by_param_size(
+    session: AsyncSession, model_set_id: int
+) -> int:
+    """Reorder all entries in *model_set_id* by parameter size descending.
+
+    Larger parameter count = higher priority (lower priority number).
+    Returns the number of entries whose priority was changed.
+    """
+    result = await session.execute(
+        select(ModelSetEntry).where(ModelSetEntry.model_set_id == model_set_id)
+    )
+    entries = list(result.scalars().all())
+
+    if len(entries) <= 1:
+        return 0
+
+    sorted_entries = sorted(
+        entries,
+        key=lambda e: _extract_param_size(e.model_name),
+        reverse=True,
+    )
+
+    to_move = [
+        (idx, entry)
+        for idx, entry in enumerate(sorted_entries, start=1)
+        if entry.priority != idx
+    ]
+
+    if not to_move:
+        return 0
+
+    # Two-phase update to avoid (model_set_id, priority) constraint violations
+    for idx, entry in to_move:
+        await session.execute(
+            update(ModelSetEntry)
+            .where(ModelSetEntry.id == entry.id)
+            .values(priority=-idx)
+        )
+    for idx, entry in to_move:
+        await session.execute(
+            update(ModelSetEntry)
+            .where(ModelSetEntry.id == entry.id)
+            .values(priority=idx)
+        )
+
+    return len(to_move)
+
+
 async def sync_auto_free_models() -> None:
     """Scan all active providers and sync the AutoFreeModels model set.
 
@@ -182,50 +230,11 @@ async def sync_auto_free_models() -> None:
                 await session.delete(entry)
                 removed += 1
 
-        # --- Reorder all remaining entries by parameter size ---
-        # Larger parameter size = higher priority (lower priority number).
-        final_result = await session.execute(
-            select(ModelSetEntry).where(
-                ModelSetEntry.model_set_id == model_set.id
-            )
-        )
-        final_entries = list(final_result.scalars().all())
-        reordered = False
-        if len(final_entries) > 1:
-            sorted_entries = sorted(
-                final_entries,
-                key=lambda e: _extract_param_size(e.model_name),
-                reverse=True,
-            )
-            # Collect entries that need a new priority
-            to_move = [
-                (idx, entry)
-                for idx, entry in enumerate(sorted_entries, start=1)
-                if entry.priority != idx
-            ]
-            if to_move:
-                # Two-phase update to avoid unique constraint violations
-                # on (model_set_id, priority).
-                for idx, entry in to_move:
-                    await session.execute(
-                        update(ModelSetEntry)
-                        .where(ModelSetEntry.id == entry.id)
-                        .values(priority=-idx)
-                    )
-                for idx, entry in to_move:
-                    await session.execute(
-                        update(ModelSetEntry)
-                        .where(ModelSetEntry.id == entry.id)
-                        .values(priority=idx)
-                    )
-                reordered = True
-
-        if added or removed or reordered:
+        if added or removed:
             logger.info(
-                "AutoFreeModels sync: %d added, %d removed, %s",
+                "AutoFreeModels sync: %d added, %d removed",
                 added,
                 removed,
-                "reordered" if reordered else "no reorder needed",
             )
         else:
             logger.info("AutoFreeModels sync: no changes")

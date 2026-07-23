@@ -168,13 +168,28 @@ function modelSetsData() {
             try {
                 const resp = await fetch(`/api/model-sets/${id}/sync`, {method: 'POST'});
                 if (resp.ok) {
-                    // Merge synced data back into sets
                     const synced = await resp.json();
                     const idx = this.sets.findIndex(s => s.id === id);
                     if (idx !== -1) this.sets[idx] = synced;
                 } else {
                     const err = await resp.json();
                     alert(err.detail || 'Sync failed');
+                }
+            } catch (e) { alert('Network error: ' + e.message); }
+            finally { if (btn) btn.disabled = false; }
+        },
+        async reorderBySize(id) {
+            const btn = document.activeElement;
+            if (btn) btn.disabled = true;
+            try {
+                const resp = await fetch(`/api/model-sets/${id}/reorder-by-size`, {method: 'POST'});
+                if (resp.ok) {
+                    const synced = await resp.json();
+                    const idx = this.sets.findIndex(s => s.id === id);
+                    if (idx !== -1) this.sets[idx] = synced;
+                } else {
+                    const err = await resp.json();
+                    alert(err.detail || 'Reorder failed');
                 }
             } catch (e) { alert('Network error: ' + e.message); }
             finally { if (btn) btn.disabled = false; }

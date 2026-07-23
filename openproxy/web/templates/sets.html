@@ -57,6 +57,7 @@
                                         <span x-text="selectedSet.name"></span>
                                         <span style="font-size:0.7rem;background:#333;border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:middle;">🔄 Auto-managed</span>
                                         <button class="small" @click="forceSync(selectedSet.id)" style="margin-left:0.5rem;font-size:0.7rem;padding:1px 6px;">⟳ Force Sync</button>
+                                        <button class="small" @click="reorderBySize(selectedSet.id)" style="font-size:0.7rem;padding:1px 6px;">📏 Reorder by Size</button>
                                     </h2>
                                 </template>
                                 <template x-if="editingName">
